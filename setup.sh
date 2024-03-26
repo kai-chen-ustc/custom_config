@@ -29,6 +29,14 @@ fi
 ln -sf "$REPO_DIR/config/.vimrc" "$HOME/.vimrc"
 ln -sf "$REPO_DIR/config/.tmux.conf" "$HOME/.tmux.conf"
 
+# Install zsh-history-substring-search plugin
+if [ ! -d "${ZSH_CUSTOM:-$HOME/.oh-my-zsh/custom}/plugins/zsh-history-substring-search" ]; then
+    echo "Installing zsh-history-substring-search plugin..."
+    git clone https://github.com/zsh-users/zsh-history-substring-search ${ZSH_CUSTOM:-$HOME/.oh-my-zsh/custom}/plugins/zsh-history-substring-search
+else
+    echo "zsh-history-substring-search plugin is already installed."
+fi
+
 # Replace the ZSH_CUSTOM line with the correct path
 ZSHRC="$REPO_DIR/config/.zshrc"
 ZSH_CUSTOM_LINE="ZSH_CUSTOM=$REPO_DIR/config"
