@@ -108,17 +108,13 @@ fi
 
 # }}}
 
-# tmux or screen ?
-(bin-exist tmux) && alias s=tmux || alias s=screen
-
-alias find='noglob find'        # noglob for find
-alias grep='grep -I --color=auto'
-alias egrep='egrep -I --color=auto'
-alias df='df -Th'
-alias du='du -h'
+# Aliases
+if [ -f ~/.bash_aliases ]; then
+    . ~/.bash_aliases
+fi
 
 # Shut up Zsh
 unsetopt beep
 
-# no need to use this when NTP is up running
+# For WSL, no need to use this when NTP is up running
 # sudo hwclock -s
