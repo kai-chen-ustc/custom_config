@@ -25,9 +25,16 @@ if [ -f "$HOME/.zshrc" ]; then
     cp "$HOME/.zshrc" "$HOME/.zshrc.bak"
 fi
 
+# Backup .bash_aliases if it exists
+if [ -f "$HOME/.bash_aliases" ]; then
+    echo "Backing up .bash_aliases to .bash_aliases.bak"
+    cp "$HOME/.bash_aliases" "$HOME/.bash_aliases.bak"
+fi
+
 # Create symbolic links for .vimrc and .tmux.conf
 ln -sf "$REPO_DIR/config/.vimrc" "$HOME/.vimrc"
 ln -sf "$REPO_DIR/config/.tmux.conf" "$HOME/.tmux.conf"
+ln -sf "$REPO_DIR/config/.bash_aliases" "$HOME/.bash_aliases"
 
 # Install zsh-history-substring-search plugin
 if [ ! -d "$ZSH_CUSTOM/plugins/zsh-history-substring-search" ]; then
