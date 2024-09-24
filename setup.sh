@@ -36,6 +36,9 @@ ln -sf "$REPO_DIR/config/.vimrc" "$HOME/.vimrc"
 ln -sf "$REPO_DIR/config/.tmux.conf" "$HOME/.tmux.conf"
 ln -sf "$REPO_DIR/config/.bash_aliases" "$HOME/.bash_aliases"
 
+# User defined custom config folder
+ZSH_CUSTOM="ZSH_CUSTOM=$REPO_DIR/config"
+
 # Install zsh-history-substring-search plugin
 if [ ! -d "$ZSH_CUSTOM/plugins/zsh-history-substring-search" ]; then
     echo "Installing zsh-history-substring-search plugin..."
@@ -46,8 +49,7 @@ fi
 
 # Replace the ZSH_CUSTOM line with the correct path
 ZSHRC="$REPO_DIR/config/.zshrc"
-ZSH_CUSTOM_LINE="ZSH_CUSTOM=$REPO_DIR/config"
-sed -i "/^ZSH_CUSTOM=/c\\$ZSH_CUSTOM_LINE" "$ZSHRC" || echo "$ZSH_CUSTOM_LINE" >> "$ZSHRC"
+sed -i "/^ZSH_CUSTOM=/c\\$ZSH_CUSTOM" "$ZSHRC" || echo "$ZSH_CUSTOM" >> "$ZSHRC"
 
 # Create a symbolic link for .zshrc
 ln -sf "$ZSHRC" "$HOME/.zshrc"
