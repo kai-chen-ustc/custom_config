@@ -20,20 +20,27 @@ zle -N edit-command-line
 bindkey '\ee' edit-command-line
 
 # Functions to change PWD color in prompt temporarily after a directory change.
-# This provides a nice visual feedback.
-__PROMPT_PWD="$pfg_magenta%~$pR"
-pwd_color_chpwd() { [ $PWD = $OLDPWD ] || __PROMPT_PWD="$pU$pfg_cyan%~$pR" }
-pwd_color_preexec() { __PROMPT_PWD="$pfg_magenta%~$pR" }
+# This provides a nice visual feedback. In nested remote tmux, it can cause issues.
+if [[ -n "$TMUX" && -n "$SSH_CLIENT" ]]; then
+    # Use a simpler, static RPROMPT for nested tmux over SSH to avoid display issues
+    local prompt_time="%(?:$pfg_green:$pfg_red)%*$pR"
+    RPROMPT='$pfg_magenta%~$pR $prompt_time'
+else
+    # Full-featured prompt for local sessions
+    __PROMPT_PWD="$pfg_magenta%~$pR"
+    pwd_color_chpwd() { [ $PWD = $OLDPWD ] || __PROMPT_PWD="$pU$pfg_cyan%~$pR" }
+    pwd_color_preexec() { __PROMPT_PWD="$pfg_magenta%~$pR" }
 
-# Add custom functions to the hooks managed by Oh My Zsh.
-preexec_functions+=(pwd_color_preexec)
-chpwd_functions+=(pwd_color_chpwd)
+    # Add custom functions to the hooks managed by Oh My Zsh.
+    preexec_functions+=(pwd_color_preexec)
+    chpwd_functions+=(pwd_color_chpwd)
 
-# Prompt configuration
-# The main prompt (PROMPT) is now managed by the selected OMZ theme.
-# We only override RPROMPT to keep the custom PWD color effect and the timestamp.
-local prompt_time="%(?:$pfg_green:$pfg_red)%*$pR"
-RPROMPT='$__PROMPT_PWD $prompt_time'
+    # Prompt configuration
+    # The main prompt (PROMPT) is now managed by the selected OMZ theme.
+    # We only override RPROMPT to keep the custom PWD color effect and the timestamp.
+    local prompt_time="%(?:$pfg_green:$pfg_red)%*$pR"
+    RPROMPT='$__PROMPT_PWD $prompt_time'
+fi
 
 # Syntax highlighting is now handled by the 'zsh-syntax-highlighting' plugin.
 
