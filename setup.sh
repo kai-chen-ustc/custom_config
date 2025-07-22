@@ -40,6 +40,9 @@ ln -sf "$REPO_DIR/config/.bash_aliases" "$HOME/.bash_aliases"
 ZSH_CUSTOM_DIR="$REPO_DIR/config"
 CUSTOM_PLUGINS_DIR="$ZSH_CUSTOM_DIR/plugins"
 
+# Define the path to the .zshrc file in the config directory
+ZSHRC="$REPO_DIR/config/.zshrc"
+
 # Install custom plugins for Oh My Zsh into the repository's custom folder
 echo "Installing custom zsh plugins into $CUSTOM_PLUGINS_DIR..."
 mkdir -p "$CUSTOM_PLUGINS_DIR"
