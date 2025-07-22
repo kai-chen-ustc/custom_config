@@ -44,5 +44,10 @@ fi
 
 # Syntax highlighting is now handled by the 'zsh-syntax-highlighting' plugin.
 
+# Load bash aliases if they exist
+if [ -f "$HOME/.bash_aliases" ]; then
+    source "$HOME/.bash_aliases"
+fi
+
 # For WSL, no need to use this when NTP is up running
 # sudo hwclock -s
