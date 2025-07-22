@@ -17,13 +17,11 @@ bindkey "\e\e" sudo-command-line
 export SUDO_PROMPT=$'[\e[31;5msudo\e[m] password for \e[33;1m%p\e[m: '
 
 # 键绑定  {{{ 
-autoload history-search-end
-zle -N history-beginning-search-backward-end history-search-end
-zle -N history-beginning-search-forward-end history-search-end
-#bindkey '^p' history-beginning-search-backward
-#bindkey '^n' history-beginning-search-forward
-bindkey -M emacs '^P' history-substring-search-up
-bindkey -M emacs '^N' history-substring-search-down
+# Built-in history search key bindings
+# Ctrl+P for previous command matching current prefix
+# Ctrl+N for next command matching current prefix
+bindkey '^P' history-search-backward
+bindkey '^N' history-search-forward
 
 autoload -U edit-command-line
 zle -N      edit-command-line
