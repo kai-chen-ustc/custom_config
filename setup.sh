@@ -1,49 +1,73 @@
 #!/bin/bash
 
-# Automatically get the directory from which the script is run
-REPO_DIR=$(pwd)
+# Get the directory of the script
+SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" &> /dev/null && pwd)
+REPO_DIR="$SCRIPT_DIR"
 
-# Define the location of the files in the home directory
-VIMRC="$HOME/.vimrc"
-TMUX_CONF="$HOME/.tmux.conf"
+# --- Function to backup files ---
+backup_file() {
+    if [ -e "$1" ] && [ ! -L "$1" ]; then
+        echo "Backing up $1 to $1.bak"
+        cp -L "$1" "$1.bak"
+    fi
+}
 
-# Backup .vimrc if it exists
-if [ -f "$VIMRC" ]; then
-    echo "Backing up .vimrc to .vimrc.bak"
-    cp "$VIMRC" "${VIMRC}.bak"
+# --- Install Oh My Zsh ---
+if [ ! -d "$HOME/.oh-my-zsh" ]; then
+    echo "Installing Oh My Zsh..."
+    sh -c "$(curl -fsSL https://raw.githubusercontent.com/ohmyzsh/ohmyzsh/master/tools/install.sh)" "" --unattended
+else
+    echo "Oh My Zsh is already installed."
 fi
 
-# Backup .tmux.conf if it exists
-if [ -f "$TMUX_CONF" ]; then
-    echo "Backing up .tmux.conf to .tmux.conf.bak"
-    cp "$TMUX_CONF" "${TMUX_CONF}.bak"
+# --- Configure .zshrc ---
+ZSHRC_FILE="$HOME/.zshrc"
+
+# Check if .zshrc exists, if not, create it from the template
+if [ ! -f "$ZSHRC_FILE" ]; then
+    echo "Creating .zshrc from template..."
+    cp "$HOME/.oh-my-zsh/templates/zshrc.zsh-template" "$ZSHRC_FILE"
 fi
 
-# Backup .zshrc if it exists
-if [ -f "$HOME/.zshrc" ]; then
-    echo "Backing up .zshrc to .zshrc.bak"
-    cp "$HOME/.zshrc" "$HOME/.zshrc.bak"
-fi
+# --- Backup existing dotfiles ---
+backup_file "$HOME/.vimrc"
+backup_file "$HOME/.tmux.conf"
+backup_file "$HOME/.bash_aliases"
+backup_file "$ZSHRC_FILE"
 
-# Backup .bash_aliases if it exists
-if [ -f "$HOME/.bash_aliases" ]; then
-    echo "Backing up .bash_aliases to .bash_aliases.bak"
-    cp "$HOME/.bash_aliases" "$HOME/.bash_aliases.bak"
-fi
 
-# Create symbolic links for .vimrc and .tmux.conf
-ln -sf "$REPO_DIR/config/.vimrc" "$HOME/.vimrc"
-ln -sf "$REPO_DIR/config/.tmux.conf" "$HOME/.tmux.conf"
-ln -sf "$REPO_DIR/config/.bash_aliases" "$HOME/.bash_aliases"
+# --- Create symbolic links for vim, tmux, and bash ---
+echo "Creating symbolic links for vim, tmux, and bash..."
+ln -sf "$REPO_DIR/config/vimrc" "$HOME/.vimrc"
+ln -sf "$REPO_DIR/config/tmux.conf" "$HOME/.tmux.conf"
+ln -sf "$REPO_DIR/config/bash_aliases" "$HOME/.bash_aliases"
 
-# User defined custom config folder
-ZSH_CUSTOM_DIR="$REPO_DIR/config"
+
+# --- Configure .zshrc content ---
+ZSH_CUSTOM_DIR="$REPO_DIR/config/omz_custom"
 CUSTOM_PLUGINS_DIR="$ZSH_CUSTOM_DIR/plugins"
 
-# Define the path to the .zshrc file in the config directory
-ZSHRC="$REPO_DIR/config/.zshrc"
+echo "Configuring .zshrc..."
 
-# Install custom plugins for Oh My Zsh into the repository's custom folder
+# 1. Set ZSH_CUSTOM path
+ZSH_CUSTOM_LINE="export ZSH_CUSTOM=\"$ZSH_CUSTOM_DIR\""
+if ! grep -q "export ZSH_CUSTOM=" "$ZSHRC_FILE"; then
+    # Insert the line after the ZSH installation path export
+    sed -i "/^export ZSH=.*$/a $ZSH_CUSTOM_LINE" "$ZSHRC_FILE"
+else
+    sed -i "s|export ZSH_CUSTOM=.*|$ZSH_CUSTOM_LINE|" "$ZSHRC_FILE"
+fi
+
+# 2. Set plugins
+PLUGINS_LINE="plugins=(git bazel sudo zsh-syntax-highlighting zsh-autosuggestions)"
+if ! grep -q "^plugins=" "$ZSHRC_FILE"; then
+    echo "$PLUGINS_LINE" >> "$ZSHRC_FILE"
+else
+    sed -i "/^plugins=/c\\$PLUGINS_LINE" "$ZSHRC_FILE"
+fi
+
+
+# --- Install custom plugins for Oh My Zsh ---
 echo "Installing custom zsh plugins into $CUSTOM_PLUGINS_DIR..."
 mkdir -p "$CUSTOM_PLUGINS_DIR"
 
@@ -53,6 +77,7 @@ if [ ! -d "$CUSTOM_PLUGINS_DIR/zsh-autosuggestions" ]; then
 else
     echo "zsh-autosuggestions is already installed."
 fi
+
 # Install zsh-syntax-highlighting
 if [ ! -d "$CUSTOM_PLUGINS_DIR/zsh-syntax-highlighting" ]; then
     git clone https://github.com/zsh-users/zsh-syntax-highlighting.git "$CUSTOM_PLUGINS_DIR/zsh-syntax-highlighting"
@@ -60,21 +85,5 @@ else
     echo "zsh-syntax-highlighting is already installed."
 fi
 
-# Define the plugins list and the line to be written to .zshrc
-PLUGINS_LINE="plugins=(git bazel sudo zsh-syntax-highlighting zsh-autosuggestions)"
-
-# Replace the plugins line in .zshrc
-sed -i "/^plugins=/c\\$PLUGINS_LINE" "$ZSHRC"
-
-# Replace the ZSH_CUSTOM line with the correct path
-ZSH_CUSTOM_LINE="ZSH_CUSTOM=\"$ZSH_CUSTOM_DIR\""
-# Use a different separator for sed to handle paths with slashes gracefully
-sed -i "\:^ZSH_CUSTOM=:c\\$ZSH_CUSTOM_LINE" "$ZSHRC" || echo "$ZSH_CUSTOM_LINE" >> "$ZSHRC"
-
-# Create a symbolic link for .zshrc
-ln -sf "$ZSHRC" "$HOME/.zshrc"
-
-# Ignore changes in .zshrc in the future
-git update-index --assume-unchanged "config/.zshrc"
-
 echo "Setup completed successfully."
+echo "Please restart your shell or run 'source ~/.zshrc' to apply the changes."
