@@ -73,14 +73,14 @@ mkdir -p "$CUSTOM_PLUGINS_DIR"
 
 # Install zsh-autosuggestions
 if [ ! -d "$CUSTOM_PLUGINS_DIR/zsh-autosuggestions" ]; then
-    git clone https://github.com/zsh-users/zsh-autosuggestions "$CUSTOM_PLUGINS_DIR/zsh-autosuggestions"
+    git clone git@github.com:zsh-users/zsh-autosuggestions.git "$CUSTOM_PLUGINS_DIR/zsh-autosuggestions"
 else
     echo "zsh-autosuggestions is already installed."
 fi
 
 # Install zsh-syntax-highlighting
 if [ ! -d "$CUSTOM_PLUGINS_DIR/zsh-syntax-highlighting" ]; then
-    git clone https://github.com/zsh-users/zsh-syntax-highlighting.git "$CUSTOM_PLUGINS_DIR/zsh-syntax-highlighting"
+    git clone git@github.com:zsh-users/zsh-syntax-highlighting.git "$CUSTOM_PLUGINS_DIR/zsh-syntax-highlighting"
 else
     echo "zsh-syntax-highlighting is already installed."
 fi
