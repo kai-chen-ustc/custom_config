@@ -51,3 +51,47 @@ fi
 
 # For WSL, no need to use this when NTP is up running
 # sudo hwclock -s
+
+__auto_conda_activate() {
+    # If a .conda_config file exists in the current directory
+    if [ -f ".conda_config" ]; then
+        # Read the environment name from the file
+        local env_name
+        env_name=$(cat .conda_config)
+
+        # Activate the environment if it's not already the active one
+        if [[ "$CONDA_DEFAULT_ENV" != "$env_name" ]]; then
+            conda activate "$env_name"
+            # If activation is successful, store the path
+            if [[ $? -eq 0 ]]; then
+                export __CONDA_AUTO_ACTIVATED_DIR=$PWD
+            fi
+        # If the correct env is already active, ensure our tracking variable is set.
+        # This handles cases where the shell is opened directly in the project directory.
+        elif [[ "$CONDA_DEFAULT_ENV" == "$env_name" && -z "$__CONDA_AUTO_ACTIVATED_DIR" ]]; then
+             export __CONDA_AUTO_ACTIVATED_DIR=$PWD
+        fi
+    # If no .conda_config, and an environment was auto-activated previously,
+    # and we are no longer in that directory or its subdirectories...
+    elif [[ -n "$__CONDA_AUTO_ACTIVATED_DIR" && "$PWD" != "$__CONDA_AUTO_ACTIVATED_DIR"* ]]; then
+        # ...deactivate it and unset the tracking variable.
+        conda deactivate
+        unset __CONDA_AUTO_ACTIVATED_DIR
+    fi
+}
+
+# For zsh, hook the function to run on every directory change.
+if [[ -n "$ZSH_VERSION" ]]; then
+    _add_conda_hook() {
+      if ! (( ${+chpwd_functions} )) || [[ -z "${chpwd_functions[(r)__auto_conda_activate]}" ]]; then
+          autoload -U add-zsh-hook
+          add-zsh-hook chpwd __auto_conda_activate
+      fi
+    }
+    _add_conda_hook
+    unset -f _add_conda_hook
+
+    # Initial run in case the shell starts inside a project directory.
+    __auto_conda_activate
+fi
+# --- End Conda auto-activation script ---
