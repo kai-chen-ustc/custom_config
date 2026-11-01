@@ -6,7 +6,10 @@
 alias find='noglob find'        # noglob for find
 alias grep='grep -I --color=auto'
 alias egrep='egrep -I --color=auto'
-alias df='df -Th'
+case $(uname -s) in
+    Darwin) alias df='df -h' ;;
+    *)      alias df='df -Th' ;;
+esac
 alias du='du -h'
 
 alias gc="git clean -f -e '!*.orig'"

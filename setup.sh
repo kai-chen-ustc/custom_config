@@ -1,89 +1,93 @@
 #!/bin/bash
+set -euo pipefail
 
-# Get the directory of the script
-SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" &> /dev/null && pwd)
-REPO_DIR="$SCRIPT_DIR"
-
-# --- Function to backup files ---
-backup_file() {
-    if [ -e "$1" ] && [ ! -L "$1" ]; then
-        echo "Backing up $1 to $1.bak"
-        cp -L "$1" "$1.bak"
-    fi
-}
-
-# --- Install Oh My Zsh ---
-if [ ! -d "$HOME/.oh-my-zsh" ]; then
-    echo "Installing Oh My Zsh..."
-    sh -c "$(curl -fsSL https://raw.githubusercontent.com/ohmyzsh/ohmyzsh/master/tools/install.sh)" "" --unattended
-else
-    echo "Oh My Zsh is already installed."
-fi
-
-# --- Configure .zshrc ---
+REPO_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 ZSHRC_FILE="$HOME/.zshrc"
-
-# Check if .zshrc exists, if not, create it from the template
-if [ ! -f "$ZSHRC_FILE" ]; then
-    echo "Creating .zshrc from template..."
-    cp "$HOME/.oh-my-zsh/templates/zshrc.zsh-template" "$ZSHRC_FILE"
-fi
-
-# --- Backup existing dotfiles ---
-backup_file "$HOME/.vimrc"
-backup_file "$HOME/.tmux.conf"
-backup_file "$HOME/.bash_aliases"
-backup_file "$ZSHRC_FILE"
-
-
-# --- Create symbolic links for vim, tmux, and bash ---
-echo "Creating symbolic links for vim, tmux, and bash..."
-ln -sf "$REPO_DIR/config/vimrc" "$HOME/.vimrc"
-ln -sf "$REPO_DIR/config/tmux.conf" "$HOME/.tmux.conf"
-ln -sf "$REPO_DIR/config/bash_aliases" "$HOME/.bash_aliases"
-
-
-# --- Configure .zshrc content ---
 ZSH_CUSTOM_DIR="$REPO_DIR/config/omz_custom"
 CUSTOM_PLUGINS_DIR="$ZSH_CUSTOM_DIR/plugins"
 
-echo "Configuring .zshrc..."
+for dependency in zsh git curl awk; do
+    command -v "$dependency" >/dev/null || {
+        echo "Required command not found: $dependency" >&2
+        exit 1
+    }
+done
+for name in .zshrc .vimrc .tmux.conf .bash_aliases; do
+    if [ -d "$HOME/$name" ]; then
+        echo "Refusing to replace directory: $HOME/$name" >&2
+        exit 1
+    fi
+done
 
-# 1. Set ZSH_CUSTOM path
-ZSH_CUSTOM_LINE="export ZSH_CUSTOM=\"$ZSH_CUSTOM_DIR\""
-if ! grep -q "export ZSH_CUSTOM=" "$ZSHRC_FILE"; then
-    # Insert the line after the ZSH installation path export
-    sed -i "/^export ZSH=.*$/a $ZSH_CUSTOM_LINE" "$ZSHRC_FILE"
-else
-    sed -i "s|export ZSH_CUSTOM=.*|$ZSH_CUSTOM_LINE|" "$ZSHRC_FILE"
+# Back up original files BEFORE the Oh My Zsh installer can change anything.
+# Each run has its own directory; preserve symlinks, including broken links.
+BACKUP_DIR=$(mktemp -d "$HOME/.custom-config-backup-$(date +%Y%m%d-%H%M%S).XXXXXX")
+chmod 700 "$BACKUP_DIR"
+for name in .zshrc .vimrc .tmux.conf .bash_aliases; do
+    if [ -e "$HOME/$name" ] || [ -L "$HOME/$name" ]; then
+        cp -Pp "$HOME/$name" "$BACKUP_DIR/$name"
+    fi
+done
+echo "Original dotfiles backed up to: $BACKUP_DIR"
+WORK_DIR=$(mktemp -d "${TMPDIR:-/tmp}/custom-config.XXXXXX")
+trap 'rm -rf "$WORK_DIR"' EXIT
+trap 'echo "Setup failed. Original dotfiles are in: $BACKUP_DIR" >&2' ERR
+
+if [ ! -f "$HOME/.oh-my-zsh/oh-my-zsh.sh" ]; then
+    # Download separately so a failed curl cannot be mistaken for success.
+    curl -fsSL https://raw.githubusercontent.com/ohmyzsh/ohmyzsh/master/tools/install.sh \
+        -o "$WORK_DIR/install-omz.sh"
+    ZSH="$HOME/.oh-my-zsh" KEEP_ZSHRC=yes CHSH=no RUNZSH=no \
+        sh "$WORK_DIR/install-omz.sh" --unattended
 fi
+[ -f "$HOME/.oh-my-zsh/oh-my-zsh.sh" ]
 
-# 2. Set plugins
-PLUGINS_LINE="plugins=(git bazel sudo zsh-syntax-highlighting zsh-autosuggestions)"
-if ! grep -q "^plugins=" "$ZSHRC_FILE"; then
-    echo "$PLUGINS_LINE" >> "$ZSHRC_FILE"
-else
-    sed -i "/^plugins=/c\\$PLUGINS_LINE" "$ZSHRC_FILE"
-fi
-
-
-# --- Install custom plugins for Oh My Zsh ---
-echo "Installing custom zsh plugins into $CUSTOM_PLUGINS_DIR..."
 mkdir -p "$CUSTOM_PLUGINS_DIR"
+for plugin in zsh-autosuggestions zsh-syntax-highlighting; do
+    if [ ! -e "$CUSTOM_PLUGINS_DIR/$plugin" ]; then
+        git clone --depth 1 "https://github.com/zsh-users/$plugin.git" "$WORK_DIR/$plugin"
+        mv "$WORK_DIR/$plugin" "$CUSTOM_PLUGINS_DIR/$plugin"
+    fi
+    [ -f "$CUSTOM_PLUGINS_DIR/$plugin/$plugin.plugin.zsh" ]
+done
 
-# Install zsh-autosuggestions
-if [ ! -d "$CUSTOM_PLUGINS_DIR/zsh-autosuggestions" ]; then
-    git clone git@github.com:zsh-users/zsh-autosuggestions.git "$CUSTOM_PLUGINS_DIR/zsh-autosuggestions"
-else
-    echo "zsh-autosuggestions is already installed."
+# Preserve personal settings, replacing only the settings managed here.
+# awk avoids GNU/BSD sed -i differences. Multiline plugin arrays are supported.
+ZSHRC_INPUT="$ZSHRC_FILE"
+if [ ! -f "$ZSHRC_INPUT" ]; then
+    ZSHRC_INPUT="$HOME/.oh-my-zsh/templates/zshrc.zsh-template"
 fi
+{
+    printf 'export ZSH=%q\n' "$HOME/.oh-my-zsh"
+    printf 'export ZSH_CUSTOM=%q\n' "$ZSH_CUSTOM_DIR"
+    printf '%s\n' 'plugins=(git bazel sudo zsh-autosuggestions zsh-syntax-highlighting)'
+    awk '
+        /^[[:space:]]*(export[[:space:]]+)?(ZSH|ZSH_CUSTOM)=/ { next }
+        /^[[:space:]]*plugins=\(/ {
+            if ($0 !~ /\)/) in_plugins = 1
+            next
+        }
+        in_plugins { if ($0 ~ /\)/) in_plugins = 0; next }
+        { print }
+        END { if (in_plugins) exit 1 }
+    ' "$ZSHRC_INPUT"
+    if ! grep -Eq '^[[:space:]]*(source|\.)[[:space:]].*oh-my-zsh\.sh' "$ZSHRC_INPUT"; then
+        printf '\n%s\n' 'ZSH_THEME="${ZSH_THEME:-robbyrussell}"' 'source "$ZSH/oh-my-zsh.sh"'
+    fi
+} > "$WORK_DIR/zshrc"
+zsh -n "$WORK_DIR/zshrc"
 
-# Install zsh-syntax-highlighting
-if [ ! -d "$CUSTOM_PLUGINS_DIR/zsh-syntax-highlighting" ]; then
-    git clone git@github.com:zsh-users/zsh-syntax-highlighting.git "$CUSTOM_PLUGINS_DIR/zsh-syntax-highlighting"
-else
-    echo "zsh-syntax-highlighting is already installed."
-fi
+# Only activate the configuration once downloads and syntax validation succeed.
+# Remove symlinks explicitly so a linked target is not overwritten.
+rm -f "$ZSHRC_FILE"
+cp "$WORK_DIR/zshrc" "$ZSHRC_FILE"
+chmod 600 "$ZSHRC_FILE"
+for pair in '.vimrc:vimrc' '.tmux.conf:tmux.conf' '.bash_aliases:bash_aliases'; do
+    destination=${pair%%:*}
+    source_file=${pair#*:}
+    rm -f "$HOME/$destination"
+    ln -s "$REPO_DIR/config/$source_file" "$HOME/$destination"
+done
 
-echo "Setup completed successfully."
-echo "Please restart your shell or run 'source ~/.zshrc' to apply the changes."
+echo "Setup completed successfully. Backups: $BACKUP_DIR"
+echo "Restart your terminal or run: exec zsh"
