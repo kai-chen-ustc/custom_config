@@ -1,6 +1,24 @@
 #check if a binary exists in path
 bin-exist() {[[ -n ${commands[$1]} ]]}
 
+# Preserve the local SSH Host alias for tmux status/title formats.
+ssh() {
+    local ssh_alias ssh_status
+
+    ssh_alias=$(command ssh -G "$@" 2>/dev/null | awk '$1 == "host" { print $2; exit }')
+    if [[ -n "$TMUX_PANE" && -n "$ssh_alias" ]]; then
+        tmux set-option -p -t "$TMUX_PANE" @ssh_alias "$ssh_alias"
+    fi
+
+    command ssh "$@"
+    ssh_status=$?
+
+    if [[ -n "$TMUX_PANE" ]]; then
+        tmux set-option -pu -t "$TMUX_PANE" @ssh_alias 2>/dev/null
+    fi
+    return "$ssh_status"
+}
+
 bindkey -e      #use emacs style keybindings
 
 codex-whoami() {
