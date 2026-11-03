@@ -19,6 +19,9 @@ ssh() {
     return "$ssh_status"
 }
 
+# Keep agent setup and cleanup in a separate process.
+alias sshk='"$ZSH_CUSTOM/../../bin/ssh-with-key"'
+
 bindkey -e      #use emacs style keybindings
 
 codex-whoami() {

@@ -1,0 +1,60 @@
+#!/bin/sh
+# Forward a dedicated key without copying it to the remote host.
+set -e
+
+usage() {
+    echo "Usage: $0 <host|user@ip> [--key path] [ssh arguments...]"
+    echo "       $0 kai-staging --key ~/.ssh/work_key -L 8080:localhost:8080"
+    echo "Default key: ${GIT_KEY_PATH:-$HOME/.ssh/id_ed25519_kai_19pine}"
+    echo "--key selects the forwarded key; SSH -i selects the login key."
+}
+
+if [ "${1:-}" = "--help" ]; then
+    usage
+    exit 0
+fi
+if [ $# -eq 0 ]; then
+    usage >&2
+    exit 1
+fi
+TARGET_HOST="$1"
+shift
+case "$TARGET_HOST" in
+    -*) echo "Error: expected a host, got $TARGET_HOST" >&2; exit 1 ;;
+esac
+
+GIT_KEY_PATH="${GIT_KEY_PATH:-$HOME/.ssh/id_ed25519_kai_19pine}"
+if [ "${1:-}" = "--key" ]; then
+    if [ $# -lt 2 ] || [ -z "$2" ]; then
+        echo "Error: --key requires a path" >&2
+        exit 1
+    fi
+    GIT_KEY_PATH="$2"
+    shift 2
+fi
+if [ ! -f "$GIT_KEY_PATH" ] || [ ! -r "$GIT_KEY_PATH" ]; then
+    echo "Error: key is not a readable file: $GIT_KEY_PATH" >&2
+    exit 1
+fi
+
+# Keep the parent shell alive so cleanup runs after SSH exits.
+echo ">>> Starting temporary SSH agent..."
+AGENT_ENV=$(ssh-agent -s)
+eval "$AGENT_ENV"
+cleanup() {
+    kill "$SSH_AGENT_PID" 2>/dev/null || :
+    if [ -n "${TMUX_PANE:-}" ]; then
+        tmux set-option -pu -t "$TMUX_PANE" @ssh_alias 2>/dev/null || :
+    fi
+}
+trap cleanup 0
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
+ssh-add "$GIT_KEY_PATH"
+echo ">>> Connecting to $TARGET_HOST with agent forwarding enabled..."
+if [ -n "${TMUX_PANE:-}" ]; then
+    tmux set-option -p -t "$TMUX_PANE" @ssh_alias "$TARGET_HOST" 2>/dev/null || :
+fi
+ssh -A "$TARGET_HOST" "$@"

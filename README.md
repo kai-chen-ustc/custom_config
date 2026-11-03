@@ -41,3 +41,44 @@ installed separately if you use them.
 To restore a backed-up file, remove its current replacement and copy the matching
 file from the printed backup directory using `cp -Pp`. Files that did not exist
 before setup will not appear in that backup directory.
+
+## SSH with a temporary agent
+
+After pulling this update, open a new Zsh terminal or run `source ~/.zshrc`.
+No setup rerun is needed for an existing installation. Later changes to the
+script take effect on the next invocation, without reloading Zsh.
+
+```sh
+sshk kai-staging
+sshk kai-staging --key ~/.ssh/work_key
+sshk kai-staging --key ~/.ssh/work_key -L 8080:localhost:8080
+sshk kai-staging --key ~/.ssh/work_key git -C project pull
+```
+
+Put `--key path` immediately after the host, before SSH options or the remote
+command. `--key` selects the key loaded into the temporary agent; SSH's `-i`
+selects a login identity. The default is `~/.ssh/id_ed25519_kai_19pine`.
+Override it for a terminal with `export GIT_KEY_PATH="$HOME/.ssh/work_key"`,
+or put that export in your personal `~/.zshrc`. An explicit `--key` takes priority.
+Use `sshk --help` for usage.
+
+The POSIX shell script works with OpenSSH on Ubuntu and macOS, including
+passphrase-protected keys (ssh-add prompts locally). Ubuntu needs `openssh-client`;
+macOS includes OpenSSH. No Python is required to use the script. Outside Zsh,
+run `bin/ssh-with-key` directly.
+
+Each invocation starts its own agent, loads the selected key and explicitly
+requests agent forwarding. The private key is never copied to the remote host.
+The agent is stopped after SSH exits or key loading fails. Use foreground SSH
+sessions: backgrounding (`-f`) or persistent multiplexed connections can outlive
+the temporary agent. Forced termination with SIGKILL cannot run cleanup.
+Only forward to trusted hosts: during the connection, a compromised remote host
+can use the forwarded agent to authenticate. The server must allow forwarding;
+run `ssh-add -l` on the remote host to verify the expected key fingerprint.
+Tmux panes retain the target host label while the SSH connection is active.
+
+Run the local checks with Python 3 (no remote connections or private keys used):
+
+```sh
+python3 -m unittest discover -s tests -v
+```
