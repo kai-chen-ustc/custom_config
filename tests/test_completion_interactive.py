@@ -71,6 +71,11 @@ class InteractiveCompletionTest(unittest.TestCase):
                     (b'sshk --key \t', b'private keys in ~/.ssh'),
                     (b'sshk --key work\t', str(keys / 'work_key').encode()),
                     (b'sshk --key /tmp/example-key \t', b'alpha-server'),
+                    (b'sshk -p 2222 \t', b'alpha-server'),
+                    (b'sshk -vp2222 --key /tmp/example-key \t', b'alpha-server'),
+                    (b'sshk -p 2222 --key \t', b'private keys in ~/.ssh'),
+                    (b'sshk alpha-server -p 2222 --key work\t', str(keys / 'work_key').encode()),
+                    (b'sshk alpha-server -p 2222 --\t', b'--key'),
                 ):
                     with self.subTest(command=command):
                         os.write(master, b'\x03\x15')

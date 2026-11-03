@@ -1,9 +1,9 @@
-#!/bin/sh
+#!/bin/bash
 # Forward a dedicated key without copying it to the remote host.
 set -e
 
 usage() {
-    echo "Usage: sshk [--key path] <host|user@ip> [--key path] [ssh arguments...]"
+    echo "Usage: sshk [--key path] [ssh options] <host|user@ip> [ssh options] [command ...]"
     echo "       sshk dev-server --key ~/.ssh/work_key -L 8080:localhost:8080"
     echo "Default key: ${GIT_KEY_PATH:-auto (~/.ssh/id_ed25519, then ~/.ssh/id_rsa)}"
     echo "--key selects the forwarded key; SSH -i selects the login key."
@@ -11,6 +11,7 @@ usage() {
 
 GIT_KEY_PATH="${GIT_KEY_PATH:-}"
 TARGET_HOST=
+ssh_args=()
 while [ $# -gt 0 ]; do
     case "$1" in
         --help) usage; exit 0 ;;
@@ -22,14 +23,38 @@ while [ $# -gt 0 ]; do
             GIT_KEY_PATH="$2"
             shift 2
             ;;
+        --)
+            ssh_args+=("$@")
+            if [ -z "$TARGET_HOST" ]; then TARGET_HOST=${2:-}; fi
+            break
+            ;;
         -*)
-            if [ -n "$TARGET_HOST" ]; then break; fi
-            echo "Error: expected a host or --key, got $1" >&2
-            exit 1
+            # Parse one option cluster; its value may be attached or the next word.
+            option=$1
+            ssh_args+=("$1")
+            shift
+            OPTIND=1
+            while getopts ':46AaCfGgKkMNnqsTtVvXxYyB:b:c:D:E:e:F:I:i:J:L:l:m:O:o:P:p:Q:R:S:W:w:' flag "$option"; do
+                case "$flag" in
+                    :)
+                        if [ $# -eq 0 ]; then
+                            echo "Error: -$OPTARG requires a value" >&2
+                            exit 1
+                        fi
+                        ssh_args+=("$1")
+                        shift
+                        ;;
+                    \?) echo "Error: unknown SSH option -$OPTARG" >&2; exit 1 ;;
+                esac
+            done
             ;;
         *)
-            if [ -n "$TARGET_HOST" ]; then break; fi
+            if [ -n "$TARGET_HOST" ]; then
+                ssh_args+=("$@")
+                break
+            fi
             TARGET_HOST="$1"
+            ssh_args+=("$1")
             shift
             ;;
     esac
@@ -56,7 +81,7 @@ if [ ! -f "$GIT_KEY_PATH" ] || [ ! -r "$GIT_KEY_PATH" ]; then
 fi
 
 # OpenSSH owns the agent lifecycle; this shell only restores the tmux label.
-echo ">>> Starting temporary SSH agent..."
+echo ">>> Starting temporary SSH agent..." >&2
 cleanup() {
     if [ -n "${TMUX_PANE:-}" ]; then
         tmux set-option -pu -t "$TMUX_PANE" @ssh_alias 2>/dev/null || :
@@ -69,12 +94,13 @@ trap 'exit 143' TERM
 
 ssh-agent sh -ec '
     key=$1
-    shift
-    echo ">>> Using key: $key"
+    host=$2
+    shift 2
+    echo ">>> Using key: $key" >&2
     ssh-add "$key"
-    echo ">>> Connecting to $1 with agent forwarding enabled..."
+    echo ">>> Connecting to $host with agent forwarding enabled..." >&2
     if [ -n "${TMUX_PANE:-}" ]; then
-        tmux set-option -p -t "$TMUX_PANE" @ssh_alias "$1" 2>/dev/null || :
+        tmux set-option -p -t "$TMUX_PANE" @ssh_alias "$host" 2>/dev/null || :
     fi
-    exec ssh -A -o "IdentityAgent=$SSH_AUTH_SOCK" -o AddKeysToAgent=no -S none "$@"
-' sshk "$GIT_KEY_PATH" "$TARGET_HOST" "$@"
+    exec ssh -A -o "IdentityAgent=$SSH_AUTH_SOCK" -o "ForwardAgent=$SSH_AUTH_SOCK" -o AddKeysToAgent=no -S none "$@"
+' sshk "$GIT_KEY_PATH" "$TARGET_HOST" "${ssh_args[@]}"

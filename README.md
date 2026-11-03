@@ -51,12 +51,17 @@ script take effect on the next invocation, without reloading Zsh.
 ```sh
 sshk dev-server
 sshk --key ~/.ssh/work_key dev-server
+sshk -p 2222 --key ~/.ssh/work_key dev-server
+sshk dev-server -p 2222 --key ~/.ssh/work_key
 sshk dev-server --key ~/.ssh/work_key -L 8080:localhost:8080
 sshk dev-server --key ~/.ssh/work_key git -C project pull
 ```
 
-Put `--key path` before or immediately after the host, before SSH options or
-the remote command. `sshk --<Tab>` lists wrapper options. `--key` selects the key loaded into the temporary agent; SSH's `-i`
+SSH options and `--key path` may appear before or after the host, in any order,
+before the remote command. Attached options such as `-p2222` and grouped options
+such as `-vp 2222` also work. Once the remote command starts, its arguments are
+passed through unchanged, including `--key`. Use `--` to end wrapper option parsing.
+`sshk --<Tab>` lists wrapper options. `--key` selects the key loaded into the temporary agent; SSH's `-i`
 selects a login identity. Key selection uses this priority:
 
 1. Explicit `--key path`.
@@ -75,14 +80,17 @@ its full path. Type a path such as `./` or `~/` to browse another directory.
 SSH options also support Tab completion. The `sshk` shell function launches
 the standalone script, so its agent environment stays separate from your shell.
 
-The POSIX shell script works with OpenSSH on Ubuntu and macOS, including
-passphrase-protected keys (ssh-add prompts locally). Ubuntu needs `openssh-client`;
+The script uses Bash 3.2 or newer (including macOS system Bash) and OpenSSH on
+Ubuntu and macOS. It supports passphrase-protected keys (ssh-add prompts locally).
+Ubuntu needs `openssh-client`;
 macOS includes OpenSSH. No Python is required to use the script. Outside Zsh,
 run `bin/ssh-with-key` directly.
 
 Each invocation starts its own agent, loads the selected key and explicitly
-requests agent forwarding. It forces SSH to use this agent, disables automatic
-loading of login keys into it, and disables connection sharing. The private key is never copied to the remote host.
+requests agent forwarding. It fixes both the login and forwarded agent sockets
+to this agent, overriding `IdentityAgent` and `ForwardAgent` in SSH config.
+It disables automatic loading of login keys into the agent and connection sharing.
+The private key is never copied to the remote host.
 OpenSSH manages the agent lifetime through `ssh-agent command`: it exits
 automatically after SSH ends or key loading fails. This uses a periodic check,
 so the local agent may remain for about 10 seconds after the forwarding connection
@@ -92,6 +100,8 @@ Only forward to trusted hosts: during the connection, a compromised remote host
 can use the forwarded agent to authenticate. The server must allow forwarding;
 run `ssh-add -l` on the remote host to verify the expected key fingerprint.
 Tmux panes retain the target host label while the SSH connection is active.
+Status messages go to stderr, so stdout contains only remote command output
+and can be redirected or piped safely.
 
 Run the local checks with Python 3 (no remote connections or private keys used):
 

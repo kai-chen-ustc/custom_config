@@ -41,28 +41,48 @@ _sshk_keys() {
 }
 
 _sshk() {
-    local service=ssh key_index=0
+    local service=ssh host_seen=0 i=2 option flag OPTARG OPTIND
     local -a words=("${words[@]}")
     local CURRENT=$CURRENT
-    if [[ ${words[2]} == --key ]]; then
-        key_index=2
-    elif [[ ${words[3]} == --key ]]; then
-        key_index=3
-    fi
-    if (( key_index && CURRENT > key_index )); then
-        if (( CURRENT == key_index + 1 )); then
-            _sshk_keys
-            return
-        fi
-        words[key_index,key_index+1]=()
-        (( CURRENT -= 2 ))
-    fi
-    if (( CURRENT <= 3 )) && [[ $PREFIX == --* ]]; then
+    while (( i < CURRENT )); do
+        case ${words[i]} in
+            --key)
+                if (( CURRENT == i + 1 )); then
+                    _sshk_keys
+                    return
+                fi
+                words[i,i+1]=()
+                (( CURRENT -= 2 ))
+                continue
+                ;;
+            --) break ;;
+            -*)
+                option=${words[i]}
+                OPTIND=1
+                while getopts ':46AaCfGgKkMNnqsTtVvXxYyB:b:c:D:E:e:F:I:i:J:L:l:m:O:o:P:p:Q:R:S:W:w:' flag "$option"; do
+                    if [[ $flag == : ]]; then
+                        if (( CURRENT == i + 1 )); then
+                            words[1]=ssh
+                            _ssh
+                            return
+                        fi
+                        (( i++ ))
+                    fi
+                done
+                ;;
+            *)
+                (( host_seen )) && break
+                host_seen=1
+                ;;
+        esac
+        (( i++ ))
+    done
+    if (( i == CURRENT )) && [[ $PREFIX == --* ]]; then
         local -a options=('--key:private key to forward' '--help:show usage')
         _describe 'sshk options' options
         return
     fi
-    if (( CURRENT == 2 )); then
+    if (( ! host_seen && i == CURRENT )) && [[ $PREFIX != -* ]]; then
         compset -P '*@'
         _ssh_hosts
         return

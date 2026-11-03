@@ -25,8 +25,9 @@ class SSHWithKeyTest(unittest.TestCase):
                 'ssh': f'#!{sys.executable}\nimport json, os, sys\n'
                        'with open(os.environ["TEST_ARGS"], "w") as f:\n'
                        '    args = sys.argv[1:]\n'
-                       '    assert args[1:7] == ["-o", "IdentityAgent=" + os.environ["SSH_AUTH_SOCK"], "-o", "AddKeysToAgent=no", "-S", "none"]\n'
-                       '    json.dump([args[0], *args[7:]], f)\n'
+                       '    assert args[1:9] == ["-o", "IdentityAgent=" + os.environ["SSH_AUTH_SOCK"], "-o", "ForwardAgent=" + os.environ["SSH_AUTH_SOCK"], "-o", "AddKeysToAgent=no", "-S", "none"]\n'
+                       '    json.dump([args[0], *args[9:]], f)\n'
+                       'print(json.dumps({"ok": True}, separators=(",", ":")))\n'
                        'sys.exit(int(os.environ["SSH_STATUS"]))',
             }.items():
                 executable = tmp / name
@@ -44,6 +45,21 @@ class SSHWithKeyTest(unittest.TestCase):
                 (['--key', str(key), 'host', 'printf', 'a b'],
                  0, 0, ['-A', 'host', 'printf', 'a b']),
             ]
+            for options in (
+                ['-p', '2222', '--key', str(key), 'host'],
+                ['--key', str(key), '-p2222', 'host'],
+                ['host', '-p', '2222', '--key', str(key)],
+                ['-vp2222', 'host', '--key', str(key)],
+                ['-vp', '2222', 'host', '--key', str(key)],
+                ['-o', 'ProxyCommand=ssh jump -W %h:%p', 'host', '--key', str(key)],
+            ):
+                forwarded = options.copy()
+                index = forwarded.index('--key')
+                del forwarded[index:index + 2]
+                cases.append((options + ['printf', '--key', 'remote value'], 0, 0,
+                              ['-A', *forwarded, 'printf', '--key', 'remote value']))
+            cases.append((['--key', str(key), '--', 'host', 'printf', '--key'],
+                          0, 0, ['-A', '--', 'host', 'printf', '--key']))
             agent_pids = []
             for args, add_status, ssh_status, expected in cases:
                 with self.subTest(args=args, add_status=add_status):
@@ -62,6 +78,8 @@ class SSHWithKeyTest(unittest.TestCase):
                         expected_tmux.insert(0, 'set-option -p -t %1 @ssh_alias host')
                     self.assertEqual(tmux_calls, expected_tmux)
                     agent_pids.append(int((tmp / 'pid').read_text()))
+                    self.assertIn('Starting temporary SSH agent', result.stderr)
+                    self.assertEqual(result.stdout, '' if expected is None else '{"ok":true}\n')
                     if expected is None:
                         self.assertFalse((tmp / 'args').exists())
                     else:
@@ -80,6 +98,27 @@ class SSHWithKeyTest(unittest.TestCase):
             for pid in agent_pids:
                 os.kill(pid, 15)
             self.assertFalse(agent_pids, 'OpenSSH did not automatically stop its agents')
+
+    def test_forward_agent_config_cannot_override_selected_agent(self):
+        with tempfile.TemporaryDirectory() as directory:
+            tmp = Path(directory)
+            key = tmp / 'key'
+            key.touch()
+            add = tmp / 'ssh-add'
+            add.write_text('#!/bin/sh\nexit 0\n')
+            add.chmod(0o755)
+            config = tmp / 'config'
+            config.write_text('Host *\n ForwardAgent /tmp/other-agent\n'
+                              ' IdentityAgent /tmp/other-agent\n AddKeysToAgent yes\n')
+            result = subprocess.run(
+                [str(SCRIPT), '-F', str(config), '--key', str(key), 'example.invalid', '-G'],
+                env=dict(os.environ, PATH=f'{tmp}:{os.environ["PATH"]}', TMUX_PANE=''),
+                capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            settings = dict(line.split(' ', 1) for line in result.stdout.splitlines())
+            self.assertEqual(settings['forwardagent'], settings['identityagent'])
+            self.assertNotEqual(settings['forwardagent'], '/tmp/other-agent')
+            self.assertEqual(settings['addkeystoagent'], 'false')
 
     def test_default_key_selection(self):
         cases = [
@@ -129,7 +168,7 @@ class SSHWithKeyTest(unittest.TestCase):
                          ZSH_CUSTOM=str(repo_link / 'config/omz_custom')),
                 capture_output=True, text=True)
             self.assertEqual(result.returncode, 0, result.stderr)
-            self.assertIn('Usage: sshk [--key path] <host|user@ip>', result.stdout)
+            self.assertIn('Usage: sshk [--key path] [ssh options] <host|user@ip>', result.stdout)
             self.assertIn('--key', result.stdout)
 
     def test_completion_routing_and_alias_migration(self):
@@ -148,6 +187,9 @@ class SSHWithKeyTest(unittest.TestCase):
                 words=(sshk host --key ''); CURRENT=4; _sshk
                 words=(sshk host --key '/key with spaces' -p ''); CURRENT=6; _sshk
                 words=(sshk host --); CURRENT=3; PREFIX=--; _sshk
+                PREFIX=''
+                words=(sshk -o --key host --key ''); CURRENT=6; _sshk
+                words=(sshk host printf --key ''); CURRENT=5; _sshk
             '''], cwd=directory,
                 env=dict(os.environ, HOME=directory, TMUX='', TMUX_PANE='',
                          ZSH_CUSTOM=str(ROOT / 'config/omz_custom')),
@@ -158,6 +200,7 @@ class SSHWithKeyTest(unittest.TestCase):
                                          'keys', 'ssh:4:ssh,host,-p,'])
             self.assertIn('--key', lines[4])
             self.assertIn('--help', lines[5])
+            self.assertEqual(lines[6:], ['keys', 'ssh:5:ssh,host,printf,--key,'])
 
     def test_private_key_candidates(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -189,7 +232,7 @@ class SSHWithKeyTest(unittest.TestCase):
             self.assertEqual(lines[-1], 'browse-path')
 
     def test_usage_errors(self):
-        for args in ([], ['host', '--key'], ['host', '--key', '/nonexistent/key'], ['-A']):
+        for args in ([], ['host', '--key'], ['host', '--key', '/nonexistent/key'], ['-A'], ['-p'], ['--'], ['host', '-p']):
             with self.subTest(args=args):
                 result = subprocess.run([str(SCRIPT), *args], capture_output=True)
                 self.assertEqual(result.returncode, 1)
