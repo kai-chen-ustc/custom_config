@@ -33,7 +33,7 @@ and WSL distributions with Bash/Zsh. On WSL, run inside Linux, not PowerShell.
 - Stops on errors and prints the backup location. Download/validation failures
   occur before activating the new configuration; this is not a full rollback.
 
-The legacy `config/.zshrc` is not used by the installer. Aliases are loaded through
+Aliases are loaded through
 Zsh/Oh My Zsh, not automatically by Bash. Optional commands referenced by custom
 functions or tmux shortcuts (such as Conda, htop, ncmpcpp, and mysdcv) must be
 installed separately if you use them.
@@ -49,18 +49,28 @@ No setup rerun is needed for an existing installation. Later changes to the
 script take effect on the next invocation, without reloading Zsh.
 
 ```sh
-sshk kai-staging
-sshk kai-staging --key ~/.ssh/work_key
-sshk kai-staging --key ~/.ssh/work_key -L 8080:localhost:8080
-sshk kai-staging --key ~/.ssh/work_key git -C project pull
+sshk dev-server
+sshk dev-server --key ~/.ssh/work_key
+sshk dev-server --key ~/.ssh/work_key -L 8080:localhost:8080
+sshk dev-server --key ~/.ssh/work_key git -C project pull
 ```
 
 Put `--key path` immediately after the host, before SSH options or the remote
 command. `--key` selects the key loaded into the temporary agent; SSH's `-i`
-selects a login identity. The default is `~/.ssh/id_ed25519_kai_19pine`.
-Override it for a terminal with `export GIT_KEY_PATH="$HOME/.ssh/work_key"`,
+selects a login identity. Key selection uses this priority:
+
+1. Explicit `--key path`.
+2. `GIT_KEY_PATH` from your environment.
+3. The first readable file among `~/.ssh/id_ed25519`, then `~/.ssh/id_rsa`.
+
+If neither standard file exists, the command asks you to specify a key. It does
+not scan custom filenames or fall back when an explicitly selected key is invalid.
+The selected path is printed before loading the key.
+Set your own default for a terminal with `export GIT_KEY_PATH="$HOME/.ssh/work_key"`,
 or put that export in your personal `~/.zshrc`. An explicit `--key` takes priority.
-Use `sshk --help` for usage.
+Use `sshk --help` for usage. Tab completes SSH host aliases and options;
+`sshk host --key <Tab>` completes key paths. The `sshk` shell function launches
+the standalone script, so its agent environment stays separate from your shell.
 
 The POSIX shell script works with OpenSSH on Ubuntu and macOS, including
 passphrase-protected keys (ssh-add prompts locally). Ubuntu needs `openssh-client`;
@@ -68,10 +78,10 @@ macOS includes OpenSSH. No Python is required to use the script. Outside Zsh,
 run `bin/ssh-with-key` directly.
 
 Each invocation starts its own agent, loads the selected key and explicitly
-requests agent forwarding. The private key is never copied to the remote host.
+requests agent forwarding. It forces SSH to use this agent, disables automatic
+loading of login keys into it, and disables connection sharing. The private key is never copied to the remote host.
 The agent is stopped after SSH exits or key loading fails. Use foreground SSH
-sessions: backgrounding (`-f`) or persistent multiplexed connections can outlive
-the temporary agent. Forced termination with SIGKILL cannot run cleanup.
+sessions: backgrounding (`-f`) can outlive the temporary agent. Forced termination with SIGKILL cannot run cleanup.
 Only forward to trusted hosts: during the connection, a compromised remote host
 can use the forwarded agent to authenticate. The server must allow forwarding;
 run `ssh-add -l` on the remote host to verify the expected key fingerprint.

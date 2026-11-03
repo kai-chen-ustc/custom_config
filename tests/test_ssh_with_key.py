@@ -24,7 +24,9 @@ class SSHWithKeyTest(unittest.TestCase):
                 'tmux': 'printf "%s\\n" "$*" >> "$TEST_TMUX"',
                 'ssh': f'#!{sys.executable}\nimport json, os, sys\n'
                        'with open(os.environ["TEST_ARGS"], "w") as f:\n'
-                       '    json.dump(sys.argv[1:], f)\n'
+                       '    args = sys.argv[1:]\n'
+                       '    assert args[1:7] == ["-o", "IdentityAgent=" + os.environ["SSH_AUTH_SOCK"], "-o", "AddKeysToAgent=no", "-S", "none"]\n'
+                       '    json.dump([args[0], *args[7:]], f)\n'
                        'sys.exit(int(os.environ["SSH_STATUS"]))',
             }.items():
                 executable = tmp / name
@@ -72,19 +74,81 @@ class SSHWithKeyTest(unittest.TestCase):
                     else:
                         self.assertEqual(json.loads((tmp / 'args').read_text()), expected)
 
-    def test_zsh_alias_with_spaces_in_repo_path(self):
+    def test_default_key_selection(self):
+        cases = [
+            (['id_rsa', 'id_ed25519'], '', None, 'id_ed25519'),
+            (['id_rsa', 'id_ed25519.pub'], '', None, 'id_rsa'),
+            (['custom_key'], '', None, None),
+            (['id_ed25519', 'custom_key'], 'custom_key', None, 'custom_key'),
+            (['id_ed25519', 'custom_key'], 'missing', 'custom_key', 'custom_key'),
+            (['id_ed25519'], 'missing', None, None),
+            (['id_ed25519'], '', 'missing', None),
+        ]
+        for files, configured, explicit, expected in cases:
+            with self.subTest(files=files, configured=configured, explicit=explicit):
+                with tempfile.TemporaryDirectory() as directory:
+                    home = Path(directory)
+                    keys = home / '.ssh'
+                    keys.mkdir()
+                    for name in files:
+                        (keys / name).touch()
+                    # Fail key loading deliberately, recording selection without using a key.
+                    add = home / 'ssh-add'
+                    add.write_text('#!/bin/sh\nprintf "%s\\n" "$1" > "$HOME/selected"\nexit 1\n')
+                    add.chmod(0o755)
+                    args = [str(SCRIPT), 'dev-server']
+                    if explicit:
+                        args += ['--key', str(keys / explicit)]
+                    result = subprocess.run(args, capture_output=True, text=True,
+                        env=dict(os.environ, HOME=directory, TMUX_PANE='',
+                                 PATH=f'{directory}:{os.environ["PATH"]}',
+                                 GIT_KEY_PATH=str(keys / configured) if configured else ''))
+                    self.assertEqual(result.returncode, 1)
+                    if expected:
+                        self.assertEqual((home / 'selected').read_text().strip(), str(keys / expected))
+                    else:
+                        self.assertFalse((home / 'selected').exists())
+                        self.assertNotIn('Starting temporary SSH agent', result.stdout)
+                        self.assertIn('Error:', result.stderr)
+
+    def test_zsh_command_with_spaces_in_repo_path(self):
         with tempfile.TemporaryDirectory() as directory:
             repo_link = Path(directory) / 'repo with spaces'
             repo_link.symlink_to(ROOT, target_is_directory=True)
             result = subprocess.run(
-                ['zsh', '-f', '-c', 'source "$ZSH_CUSTOM/custom_kai.zsh"; eval "sshk --help"'],
+                ['zsh', '-f', '-c', 'source "$ZSH_CUSTOM/custom.zsh"; eval "sshk --help"'],
                 cwd=directory,
                 env=dict(os.environ, HOME=directory, TMUX='', TMUX_PANE='',
                          ZSH_CUSTOM=str(repo_link / 'config/omz_custom')),
                 capture_output=True, text=True)
             self.assertEqual(result.returncode, 0, result.stderr)
-            self.assertIn('Usage:', result.stdout)
+            self.assertIn('Usage: sshk <host|user@ip>', result.stdout)
             self.assertIn('--key', result.stdout)
+
+    def test_completion_routing_and_alias_migration(self):
+        with tempfile.TemporaryDirectory() as directory:
+            result = subprocess.run(['zsh', '-f', '-c', r'''
+                alias sshk='old-command'
+                compdef() { print -r -- "registered:$*"; }
+                source "$ZSH_CUSTOM/custom.zsh"
+                (( $+functions[sshk] && ! $+aliases[sshk] )) || exit 1
+                _ssh() { print -r -- "$service:$CURRENT:${(j:,:)words}"; }
+                _files() { print files; }
+                _alternative() { print -r -- "options:$*"; }
+                words=(sshk dev); CURRENT=2; _sshk
+                words=(sshk host --key ''); CURRENT=4; _sshk
+                words=(sshk host --key '/key with spaces' -p ''); CURRENT=6; _sshk
+                words=(sshk host --); CURRENT=3; _sshk
+            '''], cwd=directory,
+                env=dict(os.environ, HOME=directory, TMUX='', TMUX_PANE='',
+                         ZSH_CUSTOM=str(ROOT / 'config/omz_custom')),
+                capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            lines = result.stdout.splitlines()
+            self.assertEqual(lines[:4], ['registered:_sshk sshk', 'ssh:2:ssh,dev',
+                                         'files', 'ssh:4:ssh,host,-p,'])
+            self.assertIn('--key', lines[4])
+            self.assertIn('SSH arguments:_ssh', lines[4])
 
     def test_usage_errors(self):
         for args in ([], ['host', '--key'], ['host', '--key', '/nonexistent/key'], ['-A']):

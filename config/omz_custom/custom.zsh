@@ -20,7 +20,32 @@ ssh() {
 }
 
 # Keep agent setup and cleanup in a separate process.
-alias sshk='"$ZSH_CUSTOM/../../bin/ssh-with-key"'
+# Remove the old alias when reloading an existing terminal.
+unalias sshk 2>/dev/null
+function sshk {
+    "$ZSH_CUSTOM/../../bin/ssh-with-key" "$@"
+}
+
+_sshk() {
+    local service=ssh
+    local -a words=("${words[@]}")
+    local CURRENT=$CURRENT
+    if [[ ${words[3]} == --key ]] && (( CURRENT > 3 )); then
+        if (( CURRENT == 4 )); then
+            _files
+            return
+        fi
+        words[3,4]=()
+        (( CURRENT -= 2 ))
+    fi
+    words[1]=ssh
+    if (( CURRENT == 3 )); then
+        _alternative 'key:forwarded key option:((--key\:forwarded\ key))' 'ssh:SSH arguments:_ssh'
+    else
+        _ssh
+    fi
+}
+(( $+functions[compdef] )) && compdef _sshk sshk
 
 bindkey -e      #use emacs style keybindings
 

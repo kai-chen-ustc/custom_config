@@ -3,9 +3,9 @@
 set -e
 
 usage() {
-    echo "Usage: $0 <host|user@ip> [--key path] [ssh arguments...]"
-    echo "       $0 kai-staging --key ~/.ssh/work_key -L 8080:localhost:8080"
-    echo "Default key: ${GIT_KEY_PATH:-$HOME/.ssh/id_ed25519_kai_19pine}"
+    echo "Usage: sshk <host|user@ip> [--key path] [ssh arguments...]"
+    echo "       sshk dev-server --key ~/.ssh/work_key -L 8080:localhost:8080"
+    echo "Default key: ${GIT_KEY_PATH:-auto (~/.ssh/id_ed25519, then ~/.ssh/id_rsa)}"
     echo "--key selects the forwarded key; SSH -i selects the login key."
 }
 
@@ -23,7 +23,7 @@ case "$TARGET_HOST" in
     -*) echo "Error: expected a host, got $TARGET_HOST" >&2; exit 1 ;;
 esac
 
-GIT_KEY_PATH="${GIT_KEY_PATH:-$HOME/.ssh/id_ed25519_kai_19pine}"
+GIT_KEY_PATH="${GIT_KEY_PATH:-}"
 if [ "${1:-}" = "--key" ]; then
     if [ $# -lt 2 ] || [ -z "$2" ]; then
         echo "Error: --key requires a path" >&2
@@ -31,6 +31,18 @@ if [ "${1:-}" = "--key" ]; then
     fi
     GIT_KEY_PATH="$2"
     shift 2
+fi
+if [ -z "$GIT_KEY_PATH" ]; then
+    for candidate in "$HOME/.ssh/id_ed25519" "$HOME/.ssh/id_rsa"; do
+        if [ -f "$candidate" ] && [ -r "$candidate" ]; then
+            GIT_KEY_PATH="$candidate"
+            break
+        fi
+    done
+fi
+if [ -z "$GIT_KEY_PATH" ]; then
+    echo "Error: no default key found; use --key path or set GIT_KEY_PATH" >&2
+    exit 1
 fi
 if [ ! -f "$GIT_KEY_PATH" ] || [ ! -r "$GIT_KEY_PATH" ]; then
     echo "Error: key is not a readable file: $GIT_KEY_PATH" >&2
@@ -52,9 +64,11 @@ trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
+echo ">>> Using key: $GIT_KEY_PATH"
 ssh-add "$GIT_KEY_PATH"
 echo ">>> Connecting to $TARGET_HOST with agent forwarding enabled..."
 if [ -n "${TMUX_PANE:-}" ]; then
     tmux set-option -p -t "$TMUX_PANE" @ssh_alias "$TARGET_HOST" 2>/dev/null || :
 fi
-ssh -A "$TARGET_HOST" "$@"
+# Ignore other agents and shared connections; only forward this agent's key.
+ssh -A -o "IdentityAgent=$SSH_AUTH_SOCK" -o AddKeysToAgent=no -S none "$TARGET_HOST" "$@"
