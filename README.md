@@ -83,8 +83,11 @@ run `bin/ssh-with-key` directly.
 Each invocation starts its own agent, loads the selected key and explicitly
 requests agent forwarding. It forces SSH to use this agent, disables automatic
 loading of login keys into it, and disables connection sharing. The private key is never copied to the remote host.
-The agent is stopped after SSH exits or key loading fails. Use foreground SSH
-sessions: backgrounding (`-f`) can outlive the temporary agent. Forced termination with SIGKILL cannot run cleanup.
+OpenSSH manages the agent lifetime through `ssh-agent command`: it exits
+automatically after SSH ends or key loading fails. This uses a periodic check,
+so the local agent may remain for about 10 seconds after the forwarding connection
+has closed. Use foreground SSH
+sessions: backgrounding (`-f`) can outlive the temporary agent. Forced termination with SIGKILL cannot restore the tmux label.
 Only forward to trusted hosts: during the connection, a compromised remote host
 can use the forwarded agent to authenticate. The server must allow forwarding;
 run `ssh-add -l` on the remote host to verify the expected key fingerprint.

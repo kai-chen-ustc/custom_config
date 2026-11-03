@@ -55,12 +55,9 @@ if [ ! -f "$GIT_KEY_PATH" ] || [ ! -r "$GIT_KEY_PATH" ]; then
     exit 1
 fi
 
-# Keep the parent shell alive so cleanup runs after SSH exits.
+# OpenSSH owns the agent lifecycle; this shell only restores the tmux label.
 echo ">>> Starting temporary SSH agent..."
-AGENT_ENV=$(ssh-agent -s)
-eval "$AGENT_ENV"
 cleanup() {
-    kill "$SSH_AGENT_PID" 2>/dev/null || :
     if [ -n "${TMUX_PANE:-}" ]; then
         tmux set-option -pu -t "$TMUX_PANE" @ssh_alias 2>/dev/null || :
     fi
@@ -70,11 +67,14 @@ trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
-echo ">>> Using key: $GIT_KEY_PATH"
-ssh-add "$GIT_KEY_PATH"
-echo ">>> Connecting to $TARGET_HOST with agent forwarding enabled..."
-if [ -n "${TMUX_PANE:-}" ]; then
-    tmux set-option -p -t "$TMUX_PANE" @ssh_alias "$TARGET_HOST" 2>/dev/null || :
-fi
-# Ignore other agents and shared connections; only forward this agent's key.
-ssh -A -o "IdentityAgent=$SSH_AUTH_SOCK" -o AddKeysToAgent=no -S none "$TARGET_HOST" "$@"
+ssh-agent sh -ec '
+    key=$1
+    shift
+    echo ">>> Using key: $key"
+    ssh-add "$key"
+    echo ">>> Connecting to $1 with agent forwarding enabled..."
+    if [ -n "${TMUX_PANE:-}" ]; then
+        tmux set-option -p -t "$TMUX_PANE" @ssh_alias "$1" 2>/dev/null || :
+    fi
+    exec ssh -A -o "IdentityAgent=$SSH_AUTH_SOCK" -o AddKeysToAgent=no -S none "$@"
+' sshk "$GIT_KEY_PATH" "$TARGET_HOST" "$@"

@@ -44,6 +44,7 @@ class SSHWithKeyTest(unittest.TestCase):
                 (['--key', str(key), 'host', 'printf', 'a b'],
                  0, 0, ['-A', 'host', 'printf', 'a b']),
             ]
+            agent_pids = []
             for args, add_status, ssh_status, expected in cases:
                 with self.subTest(args=args, add_status=add_status):
                     (tmp / 'args').unlink(missing_ok=True)
@@ -60,21 +61,25 @@ class SSHWithKeyTest(unittest.TestCase):
                     if expected is not None:
                         expected_tmux.insert(0, 'set-option -p -t %1 @ssh_alias host')
                     self.assertEqual(tmux_calls, expected_tmux)
-                    pid = int((tmp / 'pid').read_text())
-                    # The shell has delivered SIGTERM; allow the agent time to exit.
-                    for _ in range(100):
-                        result = subprocess.run(['ps', '-o', 'stat=', '-p', str(pid)],
-                                                capture_output=True, text=True)
-                        if not result.stdout.strip() or result.stdout.lstrip().startswith('Z'):
-                            break
-                        time.sleep(0.01)
-                    else:
-                        os.kill(pid, 15)
-                        self.fail('temporary agent survived script exit')
+                    agent_pids.append(int((tmp / 'pid').read_text()))
                     if expected is None:
                         self.assertFalse((tmp / 'args').exists())
                     else:
                         self.assertEqual(json.loads((tmp / 'args').read_text()), expected)
+
+            # OpenSSH checks whether its command exited on a roughly 10-second timer.
+            deadline = time.monotonic() + 15
+            while agent_pids and time.monotonic() < deadline:
+                for pid in agent_pids[:]:
+                    state = subprocess.run(['ps', '-o', 'stat=', '-p', str(pid)],
+                                           capture_output=True, text=True).stdout.strip()
+                    if not state or state.startswith('Z'):
+                        agent_pids.remove(pid)
+                if agent_pids:
+                    time.sleep(0.1)
+            for pid in agent_pids:
+                os.kill(pid, 15)
+            self.assertFalse(agent_pids, 'OpenSSH did not automatically stop its agents')
 
     def test_default_key_selection(self):
         cases = [
