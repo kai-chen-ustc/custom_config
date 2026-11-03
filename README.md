@@ -50,13 +50,13 @@ script take effect on the next invocation, without reloading Zsh.
 
 ```sh
 sshk dev-server
-sshk dev-server --key ~/.ssh/work_key
+sshk --key ~/.ssh/work_key dev-server
 sshk dev-server --key ~/.ssh/work_key -L 8080:localhost:8080
 sshk dev-server --key ~/.ssh/work_key git -C project pull
 ```
 
-Put `--key path` immediately after the host, before SSH options or the remote
-command. `--key` selects the key loaded into the temporary agent; SSH's `-i`
+Put `--key path` before or immediately after the host, before SSH options or
+the remote command. `sshk --<Tab>` lists wrapper options. `--key` selects the key loaded into the temporary agent; SSH's `-i`
 selects a login identity. Key selection uses this priority:
 
 1. Explicit `--key path`.
@@ -68,8 +68,11 @@ not scan custom filenames or fall back when an explicitly selected key is invali
 The selected path is printed before loading the key.
 Set your own default for a terminal with `export GIT_KEY_PATH="$HOME/.ssh/work_key"`,
 or put that export in your personal `~/.zshrc`. An explicit `--key` takes priority.
-Use `sshk --help` for usage. Tab completes SSH host aliases and options;
-`sshk host --key <Tab>` completes key paths. The `sshk` shell function launches
+Use `sshk --help` for usage. `sshk <Tab>` lists SSH config hosts in a selection
+menu. `sshk --key <Tab>` (or `sshk host --key <Tab>`) lists private keys in `~/.ssh`, identified by their
+key header; public keys and config files are excluded. Selecting a key inserts
+its full path. Type a path such as `./` or `~/` to browse another directory.
+SSH options also support Tab completion. The `sshk` shell function launches
 the standalone script, so its agent environment stays separate from your shell.
 
 The POSIX shell script works with OpenSSH on Ubuntu and macOS, including

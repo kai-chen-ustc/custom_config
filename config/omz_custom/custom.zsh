@@ -26,26 +26,55 @@ function sshk {
     "$ZSH_CUSTOM/../../bin/ssh-with-key" "$@"
 }
 
+_sshk_keys() {
+    if [[ $PREFIX == */* || $PREFIX == '~'* ]]; then
+        _files
+        return
+    fi
+    local key header
+    local -a keys expl
+    for key in "$HOME"/.ssh/*(N-.r); do
+        IFS= read -r header < "$key" || continue
+        [[ $header == '-----BEGIN '*'PRIVATE KEY-----' ]] && keys+=("${key:t}")
+    done
+    _wanted ssh-keys expl 'private keys in ~/.ssh' compadd -f -P "$HOME/.ssh/" -- "${keys[@]}"
+}
+
 _sshk() {
-    local service=ssh
+    local service=ssh key_index=0
     local -a words=("${words[@]}")
     local CURRENT=$CURRENT
-    if [[ ${words[3]} == --key ]] && (( CURRENT > 3 )); then
-        if (( CURRENT == 4 )); then
-            _files
+    if [[ ${words[2]} == --key ]]; then
+        key_index=2
+    elif [[ ${words[3]} == --key ]]; then
+        key_index=3
+    fi
+    if (( key_index && CURRENT > key_index )); then
+        if (( CURRENT == key_index + 1 )); then
+            _sshk_keys
             return
         fi
-        words[3,4]=()
+        words[key_index,key_index+1]=()
         (( CURRENT -= 2 ))
     fi
-    words[1]=ssh
-    if (( CURRENT == 3 )); then
-        _alternative 'key:forwarded key option:((--key\:forwarded\ key))' 'ssh:SSH arguments:_ssh'
-    else
-        _ssh
+    if (( CURRENT <= 3 )) && [[ $PREFIX == --* ]]; then
+        local -a options=('--key:private key to forward' '--help:show usage')
+        _describe 'sshk options' options
+        return
     fi
+    if (( CURRENT == 2 )); then
+        compset -P '*@'
+        _ssh_hosts
+        return
+    fi
+    words[1]=ssh
+    _ssh
 }
 (( $+functions[compdef] )) && compdef _sshk sshk
+# Let _ssh_hosts reach SSH config instead of returning system/known hosts first.
+zstyle ':completion:*:*:sshk:*:hosts' hosts
+zstyle ':completion:*:*:sshk:*:*' menu yes select
+zstyle ':completion:*:*:sshk:*:descriptions' format '%B%d%b'
 
 bindkey -e      #use emacs style keybindings
 

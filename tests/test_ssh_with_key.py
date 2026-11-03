@@ -41,6 +41,8 @@ class SSHWithKeyTest(unittest.TestCase):
                 (['host', '--key', str(key), 'printf', 'a b'],
                  0, 17, ['-A', 'host', 'printf', 'a b']),
                 (['host'], 1, 0, None),
+                (['--key', str(key), 'host', 'printf', 'a b'],
+                 0, 0, ['-A', 'host', 'printf', 'a b']),
             ]
             for args, add_status, ssh_status, expected in cases:
                 with self.subTest(args=args, add_status=add_status):
@@ -122,7 +124,7 @@ class SSHWithKeyTest(unittest.TestCase):
                          ZSH_CUSTOM=str(repo_link / 'config/omz_custom')),
                 capture_output=True, text=True)
             self.assertEqual(result.returncode, 0, result.stderr)
-            self.assertIn('Usage: sshk <host|user@ip>', result.stdout)
+            self.assertIn('Usage: sshk [--key path] <host|user@ip>', result.stdout)
             self.assertIn('--key', result.stdout)
 
     def test_completion_routing_and_alias_migration(self):
@@ -133,22 +135,53 @@ class SSHWithKeyTest(unittest.TestCase):
                 source "$ZSH_CUSTOM/custom.zsh"
                 (( $+functions[sshk] && ! $+aliases[sshk] )) || exit 1
                 _ssh() { print -r -- "$service:$CURRENT:${(j:,:)words}"; }
-                _files() { print files; }
-                _alternative() { print -r -- "options:$*"; }
+                _ssh_hosts() { print hosts; }
+                compset() { :; }
+                _sshk_keys() { print keys; }
+                _describe() { print -rl -- "${options[@]}"; }
                 words=(sshk dev); CURRENT=2; _sshk
                 words=(sshk host --key ''); CURRENT=4; _sshk
                 words=(sshk host --key '/key with spaces' -p ''); CURRENT=6; _sshk
-                words=(sshk host --); CURRENT=3; _sshk
+                words=(sshk host --); CURRENT=3; PREFIX=--; _sshk
             '''], cwd=directory,
                 env=dict(os.environ, HOME=directory, TMUX='', TMUX_PANE='',
                          ZSH_CUSTOM=str(ROOT / 'config/omz_custom')),
                 capture_output=True, text=True)
             self.assertEqual(result.returncode, 0, result.stderr)
             lines = result.stdout.splitlines()
-            self.assertEqual(lines[:4], ['registered:_sshk sshk', 'ssh:2:ssh,dev',
-                                         'files', 'ssh:4:ssh,host,-p,'])
+            self.assertEqual(lines[:4], ['registered:_sshk sshk', 'hosts',
+                                         'keys', 'ssh:4:ssh,host,-p,'])
             self.assertIn('--key', lines[4])
-            self.assertIn('SSH arguments:_ssh', lines[4])
+            self.assertIn('--help', lines[5])
+
+    def test_private_key_candidates(self):
+        with tempfile.TemporaryDirectory() as directory:
+            home = Path(directory)
+            keys = home / '.ssh'
+            keys.mkdir()
+            (keys / 'work key').write_text('-----BEGIN OPENSSH PRIVATE KEY-----\n')
+            (keys / 'rsa_key').write_text('-----BEGIN RSA PRIVATE KEY-----\n')
+            (keys / 'public.pub').write_text('ssh-ed25519 public-key-placeholder\n')
+            (keys / 'config').write_text('Host dev-server\n')
+            (keys / 'known_hosts').touch()
+            (keys / 'subdirectory').mkdir()
+            result = subprocess.run(['zsh', '-f', '-c', r'''
+                source "$ZSH_CUSTOM/custom.zsh"
+                _wanted() { print -rl -- "$@"; }
+                _files() { print browse-path; }
+                PREFIX=''; _sshk_keys
+                PREFIX='./'; _sshk_keys
+            '''], cwd=directory,
+                env=dict(os.environ, HOME=directory, TMUX='', TMUX_PANE='',
+                         ZSH_CUSTOM=str(ROOT / 'config/omz_custom')),
+                capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            lines = result.stdout.splitlines()
+            self.assertIn('work key', lines)
+            self.assertIn('rsa_key', lines)
+            for excluded in ('public.pub', 'config', 'known_hosts', 'subdirectory'):
+                self.assertNotIn(excluded, lines)
+            self.assertEqual(lines[-1], 'browse-path')
 
     def test_usage_errors(self):
         for args in ([], ['host', '--key'], ['host', '--key', '/nonexistent/key'], ['-A']):
