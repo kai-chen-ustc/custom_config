@@ -91,3 +91,52 @@ done
 
 echo "Setup completed successfully. Backups: $BACKUP_DIR"
 echo "Restart your terminal or run: exec zsh"
+
+# Never prompt or restore apps on Linux/WSL or in unattended runs.
+if [ "$(uname -s)" = Darwin ] && [ -t 0 ]; then
+    RESTORE_REPLY=
+    read -r -p 'Also restore the macOS apps and tools from Brewfile? [y/N] ' RESTORE_REPLY || RESTORE_REPLY=
+    case "$RESTORE_REPLY" in
+        y|Y|yes|YES)
+            echo
+            cat "$REPO_DIR/Brewfile"
+            echo
+            echo 'This will download and install the apps and tools listed above.'
+            echo 'Homebrew will be installed if missing. Some installers require your administrator password.'
+            echo 'App data and logins are not restored. No --force option is used.'
+            echo 'Existing UU Remote and Teams apps are skipped; other existing apps may cause install conflicts.'
+            echo 'Already-managed packages will not be explicitly upgraded. ego lite requires manual installation.'
+            RESTORE_CONFIRM=
+            read -r -p 'Type INSTALL to confirm, or press Enter to skip: ' RESTORE_CONFIRM || RESTORE_CONFIRM=
+            if [ "$RESTORE_CONFIRM" = INSTALL ]; then
+                trap 'echo "Application restore failed; terminal setup is already complete." >&2' ERR
+                BREW_BIN=$(command -v brew || true)
+                if [ -z "$BREW_BIN" ]; then
+                    for candidate in /opt/homebrew/bin/brew /usr/local/bin/brew; do
+                        if [ -x "$candidate" ]; then
+                            BREW_BIN="$candidate"
+                            break
+                        fi
+                    done
+                fi
+                if [ -z "$BREW_BIN" ]; then
+                    curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh \
+                        -o "$WORK_DIR/install-homebrew.sh"
+                    /bin/bash "$WORK_DIR/install-homebrew.sh"
+                    if [ "$(uname -m)" = arm64 ]; then
+                        BREW_BIN=/opt/homebrew/bin/brew
+                    else
+                        BREW_BIN=/usr/local/bin/brew
+                    fi
+                fi
+                BREW_SHELLENV=$("$BREW_BIN" shellenv)
+                eval "$BREW_SHELLENV"
+                "$BREW_BIN" bundle install --no-upgrade --file="$REPO_DIR/Brewfile"
+                echo 'Application restore completed. Follow any first-launch setup prompts.'
+            else
+                echo 'Application restore skipped.'
+            fi
+            ;;
+        *) echo 'Application restore skipped.' ;;
+    esac
+fi

@@ -15,9 +15,90 @@ and WSL distributions with Bash/Zsh. On WSL, run inside Linux, not PowerShell.
    ```
    Run as your normal user, **without sudo**. The script needs HTTPS access to
    GitHub and raw.githubusercontent.com; GitHub SSH keys are not required.
+   On macOS, after terminal setup finishes, you can optionally restore the
+   applications and tools in `Brewfile` with the two confirmations described below.
 3. Run `exec zsh` or open a terminal configured to launch Zsh. The installer does
    not change your login shell; on Linux, optionally run `chsh -s "$(command -v zsh)"`
    and log in again to make Zsh the default.
+
+## Restore applications on a new Mac
+
+After cloning this repository on a Mac, run `./setup.sh` as your normal user.
+It installs the terminal configuration first, then offers to restore the apps
+and tools in the root `Brewfile`:
+
+1. Answer `y` to the restore question (Enter skips).
+2. Review the displayed Brewfile and installation reminder, then type `INSTALL`
+   to confirm (anything else skips).
+
+Only an interactive macOS run shows these prompts. Ubuntu, WSL and redirected
+stdin skip application restoration. The choice is offered on each interactive
+macOS run, so you can decline initially and run setup again later.
+
+After both confirmations, setup uses your existing Homebrew or downloads and
+runs the [official Homebrew installer](https://brew.sh/) if it is missing.
+For a new Homebrew installation, follow its printed `brew shellenv` instructions
+to make `brew` available in future terminals; setup configures its own process.
+It then runs `brew bundle install --no-upgrade --file=Brewfile`. The list contains
+12 desktop app candidates and seven command-line tools; dependencies are resolved
+by brew. UU Remote and Teams are omitted when their apps already exist in
+`/Applications`, including manual installations.
+
+Homebrew selects current packages for the Mac's architecture. Already-managed
+packages are not explicitly upgraded (dependency installation can still require
+updates). No `--force` option is used. UU Remote and Teams use system package
+installers that can replace manual installations even without `--force`, so the
+Brewfile skips them when their app bundles already exist. Other manually installed
+apps may produce conflicts that need to be resolved separately. Some installers need
+administrator authentication or first-launch setup, so this is one command,
+not unattended migration. Logins and application data are not restored.
+If application restoration fails, terminal setup remains installed; inspect the
+error and retry the application step without rerunning terminal setup:
+
+```sh
+brew bundle install --no-upgrade --file=Brewfile
+```
+
+This direct command bypasses setup's two confirmations. This application list is
+macOS-only; `setup.sh` remains usable on macOS, Ubuntu, and WSL.
+
+| Application | Homebrew cask |
+| --- | --- |
+| ChatGPT desktop | `chatgpt` |
+| Clash Verge Rev | `clash-verge-rev` |
+| Discord | `discord` |
+| Docker Desktop | `docker-desktop` |
+| Google Chrome | `google-chrome` |
+| Seafile Client | `seafile-client` |
+| UU Remote / UU 远程助手 | `uuremote` |
+| WeChat Input / 微信输入法 | `wetype` |
+| Feishu / 飞书 | `feishu` |
+| WeChat / 微信 | `wechat` |
+| Joplin | `joplin` |
+| Microsoft Teams | `microsoft-teams` |
+| ego lite | Install manually from [ego.app](https://ego.app/) |
+
+Safari and other macOS system apps are excluded. The official cask index has no
+ego lite entry; its upstream
+[packaging request](https://github.com/citrolabs/ego-lite/issues/58) remains open.
+
+On the existing Mac, listing a manually installed app here does not register it
+with Homebrew. `brew install --cask --adopt NAME` can adopt an existing app only
+when its contents match the downloaded package. A mismatch needs a separately
+planned replacement; do not force-replace running apps just to register them.
+
+Application logins, browser profiles, WeChat history, Seafile sync configuration,
+Joplin notes, Docker images/volumes, input-method activation, macOS privacy
+permissions, and `~/Library/KeyBindings/DefaultKeyBinding.dict` are not backed up
+by Brewfile. Migrate or sync these separately. Keep the Brewfile in your repository
+backup; this file alone is not a backup of application data.
+
+Use `brew bundle list --all --file=Brewfile` to inspect the list, and
+`brew bundle check --no-upgrade --file=Brewfile` to check installation status.
+Most of these apps update themselves. `brew upgrade --cask --greedy` also includes
+self-updating casks when checking for upgrades; review available updates before
+running it. Avoid `brew bundle cleanup` unless you intend to remove packages
+outside this list.
 
 ## What it does
 
