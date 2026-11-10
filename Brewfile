@@ -1,4 +1,4 @@
-# macOS applications and tools: brew bundle install --file=Brewfile
+# Restore macOS applications and tools: bash bin/restore-apps
 # Command-line tools; Homebrew resolves their dependencies.
 brew "fnm"
 brew "gh"
@@ -15,14 +15,13 @@ cask "discord"
 cask "docker-desktop"
 cask "google-chrome"
 cask "seafile-client"
-# Package installers can replace apps even without --force.
-cask "uuremote" unless File.exist?("/Applications/UURemote.app")
+cask "uuremote"
 cask "wetype"
 
 # Communication and notes.
 cask "feishu"
 cask "wechat"
 cask "joplin"
-cask "microsoft-teams" unless File.exist?("/Applications/Microsoft Teams.app")
+cask "microsoft-teams"
 
 # ego lite has no official Homebrew cask; install from https://ego.app/.

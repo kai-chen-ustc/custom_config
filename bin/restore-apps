@@ -1,0 +1,42 @@
+#!/bin/bash
+set -euo pipefail
+
+REPO_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
+if [ "$(uname -s)" != Darwin ]; then
+    echo 'Application restore is macOS-only.' >&2
+    exit 1
+fi
+BREW_BIN=${BREW_BIN:-brew}
+INSTALLED_CASKS=$("$BREW_BIN" list --cask)
+SKIP_CASKS=${HOMEBREW_BUNDLE_CASK_SKIP:-}
+
+# shortcut: known app names and standard locations only; update when casks rename apps.
+while IFS='|' read -r cask app; do
+    if printf '%s\n' "$INSTALLED_CASKS" | grep -Fxq "$cask"; then
+        continue
+    fi
+    for directory in /Applications "$HOME/Applications" /Library/Input\ Methods "$HOME/Library/Input Methods"; do
+        if [ -d "$directory/$app" ]; then
+            echo "Skipping $cask: $directory/$app exists and is not managed by Homebrew."
+            SKIP_CASKS="$SKIP_CASKS $cask"
+            break
+        fi
+    done
+done <<'APPS'
+chatgpt|ChatGPT.app
+clash-verge-rev|Clash Verge.app
+discord|Discord.app
+docker-desktop|Docker.app
+google-chrome|Google Chrome.app
+seafile-client|Seafile Client.app
+uuremote|UURemote.app
+wetype|WeType.app
+feishu|Feishu.app
+wechat|WeChat.app
+joplin|Joplin.app
+microsoft-teams|Microsoft Teams.app
+APPS
+
+# Keep the complete Brewfile visible to list/check/cleanup; skip only this installation.
+HOMEBREW_BUNDLE_CASK_SKIP="$SKIP_CASKS" \
+    "$BREW_BIN" bundle install --no-upgrade --file="$REPO_DIR/Brewfile"

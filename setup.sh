@@ -104,7 +104,7 @@ if [ "$(uname -s)" = Darwin ] && [ -t 0 ]; then
             echo 'This will download and install the apps and tools listed above.'
             echo 'Homebrew will be installed if missing. Some installers require your administrator password.'
             echo 'App data and logins are not restored. No --force option is used.'
-            echo 'Existing UU Remote and Teams apps are skipped; other existing apps may cause install conflicts.'
+            echo 'Existing apps not managed by Homebrew are skipped and reported.'
             echo 'Already-managed packages will not be explicitly upgraded. ego lite requires manual installation.'
             RESTORE_CONFIRM=
             read -r -p 'Type INSTALL to confirm, or press Enter to skip: ' RESTORE_CONFIRM || RESTORE_CONFIRM=
@@ -131,7 +131,7 @@ if [ "$(uname -s)" = Darwin ] && [ -t 0 ]; then
                 fi
                 BREW_SHELLENV=$("$BREW_BIN" shellenv)
                 eval "$BREW_SHELLENV"
-                "$BREW_BIN" bundle install --no-upgrade --file="$REPO_DIR/Brewfile"
+                BREW_BIN="$BREW_BIN" /bin/bash "$REPO_DIR/bin/restore-apps"
                 echo 'Application restore completed. Follow any first-launch setup prompts.'
             else
                 echo 'Application restore skipped.'

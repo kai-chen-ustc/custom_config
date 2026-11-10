@@ -39,27 +39,35 @@ After both confirmations, setup uses your existing Homebrew or downloads and
 runs the [official Homebrew installer](https://brew.sh/) if it is missing.
 For a new Homebrew installation, follow its printed `brew shellenv` instructions
 to make `brew` available in future terminals; setup configures its own process.
-It then runs `brew bundle install --no-upgrade --file=Brewfile`. The list contains
-12 desktop app candidates and seven command-line tools; dependencies are resolved
-by brew. UU Remote and Teams are omitted when their apps already exist in
-`/Applications`, including manual installations.
+It then runs `bash bin/restore-apps`, which installs the complete Brewfile with
+`brew bundle install --no-upgrade`. The list contains 12 desktop apps and seven
+command-line tools; dependencies are resolved by brew.
 
-Homebrew selects current packages for the Mac's architecture. Already-managed
-packages are not explicitly upgraded (dependency installation can still require
-updates). No `--force` option is used. UU Remote and Teams use system package
-installers that can replace manual installations even without `--force`, so the
-Brewfile skips them when their app bundles already exist. Other manually installed
-apps may produce conflicts that need to be resolved separately. Some installers need
+The restore script reports and skips existing desktop apps that Homebrew does
+not manage. It checks known app names in `/Applications`, `~/Applications`,
+and the system/user `Library/Input Methods` directories (for WeType).
+Skipped apps stay under their existing update mechanism; they are not adopted
+by Homebrew. Detection does not verify app versions or health, and renamed apps
+or custom installation locations may still cause conflicts.
+
+Already-managed packages remain in the installation request and are not explicitly
+upgraded (dependency installation can still require updates). No `--force` option
+is used. The Brewfile always keeps every entry, so listing and cleanup do not
+change based on which apps happen to exist. The skip list applies only to the
+restore command and preserves any existing `HOMEBREW_BUNDLE_CASK_SKIP` setting.
+Some installers need
 administrator authentication or first-launch setup, so this is one command,
 not unattended migration. Logins and application data are not restored.
 If application restoration fails, terminal setup remains installed; inspect the
 error and retry the application step without rerunning terminal setup:
 
 ```sh
-brew bundle install --no-upgrade --file=Brewfile
+bash bin/restore-apps
 ```
 
-This direct command bypasses setup's two confirmations. This application list is
+This direct command requires Homebrew on PATH and bypasses setup's two confirmations.
+Running `brew bundle install` directly bypasses the manual-app protection.
+`brew bundle check` still reports skipped, unmanaged apps as missing from Homebrew. This application list is
 macOS-only; `setup.sh` remains usable on macOS, Ubuntu, and WSL.
 
 | Application | Homebrew cask |

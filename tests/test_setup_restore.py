@@ -1,5 +1,4 @@
 """Run setup in a temporary home with fake downloads and Homebrew."""
-import json
 import os
 from pathlib import Path
 import pty
@@ -25,6 +24,10 @@ class SetupRestoreTest(unittest.TestCase):
             script = script.replace('/usr/local', str(tmp / 'usr/local'))
             (repo / 'setup.sh').write_text(script)
             shutil.copy2(ROOT / 'Brewfile', repo)
+            (repo / 'bin').mkdir()
+            helper = (ROOT / 'bin/restore-apps').read_text()
+            helper = helper.replace('/Applications', '/EmptyApplications').replace('/Library/Input', '/EmptyLibrary/Input')
+            (repo / 'bin/restore-apps').write_text(helper)
             for plugin in ('zsh-autosuggestions', 'zsh-syntax-highlighting'):
                 path = repo / 'config/omz_custom/plugins' / plugin
                 path.mkdir(parents=True)
@@ -120,7 +123,7 @@ class SetupRestoreTest(unittest.TestCase):
         self.assertEqual(code, 0, output)
         self.assertIn('cask "chatgpt"', output)
         self.assertIn('administrator password', output)
-        self.assertEqual(calls, ['shellenv', f'bundle install --no-upgrade --file={repo}/Brewfile'])
+        self.assertEqual(calls, ['shellenv', 'list --cask', f'bundle install --no-upgrade --file={repo}/Brewfile'])
         self.assertIn('Application restore completed.', output)
 
     def test_brew_failure_reports_terminal_setup_is_preserved(self):
@@ -128,14 +131,14 @@ class SetupRestoreTest(unittest.TestCase):
         self.assertEqual(code, 23, output)
         self.assertIn('Application restore failed; terminal setup is already complete.', output)
         self.assertNotIn('Application restore completed.', output)
-        self.assertEqual(len(calls), 2)
+        self.assertEqual(len(calls), 3)
 
     def test_bootstrap_homebrew_on_both_architectures(self):
         for arch in ('arm64', 'x86_64'):
             with self.subTest(arch=arch):
                 code, output, calls, repo = self.run_setup(brew_present=False, arch=arch)
                 self.assertEqual(code, 0, output)
-                self.assertEqual(calls, ['download', 'installer', 'shellenv',
+                self.assertEqual(calls, ['download', 'installer', 'shellenv', 'list --cask',
                                         f'bundle install --no-upgrade --file={repo}/Brewfile'])
                 self.assertIn('Application restore completed.', output)
 
@@ -151,31 +154,52 @@ class SetupRestoreTest(unittest.TestCase):
                 self.assertIn('Application restore failed; terminal setup is already complete.', output)
                 self.assertNotIn('Application restore completed.', output)
 
-    @unittest.skipUnless(shutil.which('ruby'), 'Ruby is needed to evaluate Brewfile conditions')
-    def test_existing_package_apps_are_excluded_from_brewfile(self):
-        # Evaluate the actual Ruby DSL with simulated app presence, without Homebrew.
-        ruby = r'''
-require "json"
-$selected = []
-def brew(*) end
-def cask(name); $selected << name; end
-class File
-  def self.exist?(path)
-    JSON.parse(ENV.fetch("TEST_APPS")).include?(path)
-  end
-end
-load ARGV.fetch(0)
-puts JSON.generate($selected)
-'''
-        apps = {'uuremote': '/Applications/UURemote.app',
-                'microsoft-teams': '/Applications/Microsoft Teams.app'}
-        for existing in ([], ['uuremote'], ['microsoft-teams'], list(apps)):
-            with self.subTest(existing=existing):
-                result = subprocess.run(['ruby', '-e', ruby, str(ROOT / 'Brewfile')],
-                                        env=dict(os.environ, TEST_APPS=json.dumps([apps[n] for n in existing])),
-                                        capture_output=True, text=True, check=True)
-                selected = json.loads(result.stdout)
-                for name in apps:
-                    self.assertEqual(name in selected, name not in existing)
-                self.assertIn('chatgpt', selected)
-                self.assertEqual(len(selected), 12 - len(existing))
+    def test_restore_skips_manual_apps_but_keeps_managed_and_missing_apps(self):
+        with tempfile.TemporaryDirectory() as directory:
+            tmp = Path(directory)
+            (tmp / 'bin').mkdir()
+            helper = (ROOT / 'bin/restore-apps').read_text()
+            helper = helper.replace('/Applications', '/Apps').replace('/Library/Input Methods', '/InputMethods')
+            helper = helper.replace('in /Apps ', f'in "{tmp}/system/Apps" ')
+            helper = helper.replace('/Library/Input\\ Methods', f'"{tmp}/system/InputMethods"')
+            (tmp / 'bin/restore-apps').write_text(helper)
+            shutil.copy2(ROOT / 'Brewfile', tmp)
+            for app in ('system/Apps/Clash Verge.app', 'Apps/Google Chrome.app',
+                        'InputMethods/WeType.app', 'Apps/Microsoft Teams.app'):
+                (tmp / app).mkdir(parents=True)
+            brew = tmp / 'bin/brew'
+            brew.write_text('#!/bin/sh\n'
+                            'if [ "$1" = list ]; then echo microsoft-teams; exit "${LIST_STATUS:-0}"; fi\n'
+                            'printf "%s\\n" "$HOMEBREW_BUNDLE_CASK_SKIP" > "$HOME/skipped"\n'
+                            'printf "%s\\n" "$*" > "$HOME/args"\n')
+            brew.chmod(0o755)
+            uname = tmp / 'bin/uname'
+            uname.write_text('#!/bin/sh\necho Darwin\n')
+            uname.chmod(0o755)
+            env = dict(os.environ, HOME=str(tmp), PATH=f'{tmp}/bin:/usr/bin:/bin',
+                       BREW_BIN=str(brew), HOMEBREW_BUNDLE_CASK_SKIP='discord')
+            for _ in range(2):
+                result = subprocess.run(['bash', str(tmp / 'bin/restore-apps')],
+                                        env=env, capture_output=True, text=True)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(set((tmp / 'skipped').read_text().split()),
+                                 {'discord', 'clash-verge-rev', 'google-chrome', 'wetype'})
+                self.assertIn('not managed by Homebrew', result.stdout)
+                self.assertNotIn('Skipping microsoft-teams', result.stdout)
+                self.assertEqual((tmp / 'args').read_text().strip(),
+                                 f'bundle install --no-upgrade --file={tmp}/Brewfile')
+            self.assertEqual((tmp / 'Brewfile').read_text(), (ROOT / 'Brewfile').read_text())
+            (tmp / 'skipped').unlink()
+            result = subprocess.run(['bash', str(tmp / 'bin/restore-apps')],
+                                    env=dict(env, LIST_STATUS='23'), capture_output=True)
+            self.assertEqual(result.returncode, 23)
+            self.assertFalse((tmp / 'skipped').exists())
+
+    def test_all_casks_remain_unconditional_and_have_app_detection(self):
+        casks = [line.split('"')[1] for line in (ROOT / 'Brewfile').read_text().splitlines()
+                 if line.startswith('cask ')]
+        helper = (ROOT / 'bin/restore-apps').read_text()
+        self.assertEqual(len(casks), 12)
+        self.assertNotIn('unless', (ROOT / 'Brewfile').read_text())
+        for cask in casks:
+            self.assertIn('\n' + cask + '|', helper)
