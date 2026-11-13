@@ -188,6 +188,45 @@ sessions: backgrounding (`-f`) can outlive the temporary agent. Forced terminati
 Only forward to trusted hosts: during the connection, a compromised remote host
 can use the forwarded agent to authenticate. The server must allow forwarding;
 run `ssh-add -l` on the remote host to verify the expected key fingerprint.
+
+Setup, verification, and rollback are documented in
+[Remote configuration](docs/remote-config.md). Keep host-specific deployment
+records in the Git-ignored `docs/remote-config.local.md`. The remote shell block is tracked
+in [config/remote/hc-agent.zsh](config/remote/hc-agent.zsh).
+
+For a Herdr desktop / `hc` machine, use the script's absolute path with `--hc`:
+
+```sh
+hc machine add --name dev \
+  --via '/absolute/path/to/custom_config/bin/ssh-with-key --hc --key /absolute/path/to/work_key dev-server'
+```
+
+`--hc` disables SSH terminal allocation and interactive authentication, uses a
+10-second connection timeout, and requires the remote command supplied by hc.
+Key loading must succeed without a prompt; encrypted keys that cannot be unlocked
+non-interactively fail instead of waiting for input. Output on stdout remains
+reserved for hc's protocol.
+
+On each connection it atomically updates the remote symlink
+`~/.ssh/hc-forwarded-agent.sock` to that connection's forwarded agent socket.
+Only the socket path is written remotely, never the private key. Add this at the
+end of the remote user's `~/.zshrc` for hc's interactive Zsh terminals:
+
+```sh
+if [[ -n "$HC_TERMINAL_ID" && -L "$HOME/.ssh/hc-forwarded-agent.sock" ]]; then
+    export SSH_AUTH_SOCK="$HOME/.ssh/hc-forwarded-agent.sock"
+fi
+```
+
+New terminals inherit the fixed path. In an existing shell, run the export once;
+already-running programs retain their environment. After reconnection, shells
+using the fixed path can use the replacement agent without restarting. Git cannot
+use it while the forwarding connection is down. This is one forwarded identity
+per remote Unix account: the latest `--hc` connection replaces the link, so do not
+use competing connections or short-lived `--hc` probes for the same account.
+This Zsh setup does not change the environment of non-interactive `hc exec`
+commands. Other shells need the equivalent startup configuration.
+
 Tmux panes retain the target host label while the SSH connection is active.
 Status messages go to stderr, so stdout contains only remote command output
 and can be redirected or piped safely.

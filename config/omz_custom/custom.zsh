@@ -46,6 +46,11 @@ _sshk() {
     local CURRENT=$CURRENT
     while (( i < CURRENT )); do
         case ${words[i]} in
+            --hc)
+                words[i]=()
+                (( CURRENT-- ))
+                continue
+                ;;
             --key)
                 if (( CURRENT == i + 1 )); then
                     _sshk_keys
@@ -78,7 +83,7 @@ _sshk() {
         (( i++ ))
     done
     if (( i == CURRENT )) && [[ $PREFIX == --* ]]; then
-        local -a options=('--key:private key to forward' '--help:show usage')
+        local -a options=('--key:private key to forward' '--help:show usage' '--hc:non-interactive hc transport')
         _describe 'sshk options' options
         return
     fi

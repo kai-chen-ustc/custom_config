@@ -12,6 +12,52 @@ SCRIPT = ROOT / 'bin/ssh-with-key'
 
 
 class SSHWithKeyTest(unittest.TestCase):
+    def test_hc_transport_and_reconnect(self):
+        # Execute the remote bootstrap locally through a mock SSH transport.
+        # Real temporary agents provide sockets; no keys or network are used.
+        with tempfile.TemporaryDirectory() as directory:
+            tmp = Path(directory)
+            key = tmp / 'key'
+            key.touch()
+            remote = tmp / "remote home with 'quotes'"
+            remote.mkdir()
+            (tmp / 'ssh-add').write_text(
+                '#!/bin/sh\n[ "$SSH_ASKPASS_REQUIRE" = force ] || exit 1\n'
+                '[ "$SSH_ASKPASS" = /usr/bin/false ] || exit 1\n'
+                'test -z "$(cat)"\n')
+            (tmp / 'ssh').write_text(
+                f'#!{sys.executable}\nimport os, subprocess, sys\n'
+                'assert "-T" in sys.argv and "BatchMode=yes" in sys.argv\n'
+                'os.environ["HOME"] = os.environ["TEST_REMOTE"]\n'
+                'if os.environ.get("NO_FORWARD"): os.environ.pop("SSH_AUTH_SOCK", None)\n'
+                'sys.exit(subprocess.run(["sh", "-c", sys.argv[-1]]).returncode)\n')
+            for name in ('ssh', 'ssh-add'):
+                (tmp / name).chmod(0o755)
+            env = dict(os.environ, PATH=f'{tmp}:{os.environ["PATH"]}',
+                       TEST_REMOTE=str(remote), TMUX_PANE='')
+            command = 'printf "%s\\n" "it\'s intact"; cat; exit 17'
+            args = [str(SCRIPT), '--hc', '--key', str(key), 'host', command]
+            link = remote / '.ssh/hc-forwarded-agent.sock'
+            targets = []
+            for _ in range(2):
+                result = subprocess.run(args, env=env, input='protocol bytes\n',
+                                        capture_output=True, text=True)
+                self.assertEqual(result.returncode, 17, result.stderr)
+                self.assertEqual(result.stdout, "it's intact\nprotocol bytes\n")
+                self.assertTrue(link.is_symlink())
+                targets.append(os.readlink(link))
+            self.assertNotEqual(*targets)
+            result = subprocess.run(args, env=dict(env, NO_FORWARD='1'),
+                                    capture_output=True, text=True)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn('no forwarded SSH agent', result.stderr)
+            self.assertEqual(os.readlink(link), targets[-1])
+            link.unlink()
+            link.write_text('keep this file')
+            result = subprocess.run(args, env=env, capture_output=True, text=True)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertEqual(link.read_text(), 'keep this file')
+
     def test_agent_lifecycle_and_arguments(self):
         # Use a real agent, but never load private keys or connect to a server.
         with tempfile.TemporaryDirectory() as directory:
@@ -200,7 +246,8 @@ class SSHWithKeyTest(unittest.TestCase):
                                          'keys', 'ssh:4:ssh,host,-p,'])
             self.assertIn('--key', lines[4])
             self.assertIn('--help', lines[5])
-            self.assertEqual(lines[6:], ['keys', 'ssh:5:ssh,host,printf,--key,'])
+            self.assertIn('--hc', lines[6])
+            self.assertEqual(lines[7:], ['keys', 'ssh:5:ssh,host,printf,--key,'])
 
     def test_private_key_candidates(self):
         with tempfile.TemporaryDirectory() as directory:

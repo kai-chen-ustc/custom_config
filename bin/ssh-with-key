@@ -7,14 +7,18 @@ usage() {
     echo "       sshk dev-server --key ~/.ssh/work_key -L 8080:localhost:8080"
     echo "Default key: ${GIT_KEY_PATH:-auto (~/.ssh/id_ed25519, then ~/.ssh/id_rsa)}"
     echo "--key selects the forwarded key; SSH -i selects the login key."
+    echo "--hc enables non-interactive hc transport and a stable remote agent socket."
 }
 
 GIT_KEY_PATH="${GIT_KEY_PATH:-}"
 TARGET_HOST=
+HC_MODE=0
 ssh_args=()
+remote_args=()
 while [ $# -gt 0 ]; do
     case "$1" in
         --help) usage; exit 0 ;;
+        --hc) HC_MODE=1; shift ;;
         --key)
             if [ $# -lt 2 ] || [ -z "$2" ]; then
                 echo "Error: --key requires a path" >&2
@@ -24,8 +28,14 @@ while [ $# -gt 0 ]; do
             shift 2
             ;;
         --)
-            ssh_args+=("$@")
-            if [ -z "$TARGET_HOST" ]; then TARGET_HOST=${2:-}; fi
+            ssh_args+=("$1")
+            shift
+            if [ -z "$TARGET_HOST" ] && [ $# -gt 0 ]; then
+                TARGET_HOST=$1
+                ssh_args+=("$1")
+                shift
+            fi
+            remote_args=("$@")
             break
             ;;
         -*)
@@ -50,7 +60,7 @@ while [ $# -gt 0 ]; do
             ;;
         *)
             if [ -n "$TARGET_HOST" ]; then
-                ssh_args+=("$@")
+                remote_args=("$@")
                 break
             fi
             TARGET_HOST="$1"
@@ -63,6 +73,50 @@ if [ -z "$TARGET_HOST" ]; then
     usage >&2
     exit 1
 fi
+
+if [ "$HC_MODE" = 1 ]; then
+    if [ ${#remote_args[@]} -eq 0 ]; then
+        echo "Error: --hc requires a remote command (normally supplied by hc --via)" >&2
+        exit 1
+    fi
+    # OpenSSH joins command arguments with spaces. Preserve that behavior, then
+    # quote the entire command as one argument to the remote bootstrap shell.
+    shell_quote() {
+        local value=$1
+        printf '%s' "'"
+        while [[ $value == *"'"* ]]; do
+            printf '%s' "${value%%\'*}" "'\\''"
+            value=${value#*\'}
+        done
+        printf "%s'" "$value"
+    }
+    bootstrap=$(cat <<'REMOTE'
+set -eu
+if [ -z "${SSH_AUTH_SOCK:-}" ] || [ ! -S "$SSH_AUTH_SOCK" ]; then
+    echo "sshk --hc: no forwarded SSH agent on the remote host" >&2
+    exit 1
+fi
+mkdir -p "$HOME/.ssh"
+link=$HOME/.ssh/hc-forwarded-agent.sock
+if [ -d "$link" ] || { [ -e "$link" ] && [ ! -L "$link" ]; }; then
+    echo "sshk --hc: refusing to replace a non-symlink: $link" >&2
+    exit 1
+fi
+# Publish atomically; leave the link on disconnect so existing shells recover
+# when the next connection replaces it. One forwarding connection per account.
+scratch=$(mktemp -d "$HOME/.ssh/.hc-agent.XXXXXX")
+trap 'rm -f "$scratch/socket"; rmdir "$scratch"' 0
+ln -s "$SSH_AUTH_SOCK" "$scratch/socket"
+mv -f "$scratch/socket" "$link"
+rmdir "$scratch"
+trap - 0
+exec sh -c "$1"
+REMOTE
+)
+    remote_args=("sh -c $(shell_quote "$bootstrap") sshk-hc $(shell_quote "${remote_args[*]}")")
+    ssh_args=(-T -o BatchMode=yes -o ConnectTimeout=10 "${ssh_args[@]}")
+fi
+ssh_args+=("${remote_args[@]}")
 if [ -z "$GIT_KEY_PATH" ]; then
     for candidate in "$HOME/.ssh/id_ed25519" "$HOME/.ssh/id_rsa"; do
         if [ -f "$candidate" ] && [ -r "$candidate" ]; then
@@ -95,12 +149,18 @@ trap 'exit 143' TERM
 ssh-agent sh -ec '
     key=$1
     host=$2
-    shift 2
+    hc_mode=$3
+    shift 3
     echo ">>> Using key: $key" >&2
-    ssh-add "$key"
+    if [ "$hc_mode" = 1 ]; then
+        # hc carries a byte protocol on stdin; never read it for a passphrase.
+        SSH_ASKPASS_REQUIRE=force SSH_ASKPASS=/usr/bin/false ssh-add "$key" </dev/null
+    else
+        ssh-add "$key"
+    fi
     echo ">>> Connecting to $host with agent forwarding enabled..." >&2
     if [ -n "${TMUX_PANE:-}" ]; then
         tmux set-option -p -t "$TMUX_PANE" @ssh_alias "$host" 2>/dev/null || :
     fi
     exec ssh -A -o "IdentityAgent=$SSH_AUTH_SOCK" -o "ForwardAgent=$SSH_AUTH_SOCK" -o AddKeysToAgent=no -S none "$@"
-' sshk "$GIT_KEY_PATH" "$TARGET_HOST" "${ssh_args[@]}"
+' sshk "$GIT_KEY_PATH" "$TARGET_HOST" "$HC_MODE" "${ssh_args[@]}"
