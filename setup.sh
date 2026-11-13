@@ -140,3 +140,21 @@ if [ "$(uname -s)" = Darwin ] && [ -t 0 ]; then
         *) echo 'Application restore skipped.' ;;
     esac
 fi
+
+# Shared SSH configuration is optional on every platform and always comes last.
+if [ -t 0 ]; then
+    SHARED_SSH_REPLY=
+    read -r -p '是否配置共享 SSH 配置？[y/N] ' SHARED_SSH_REPLY || SHARED_SSH_REPLY=
+    case "$SHARED_SSH_REPLY" in
+        y|Y|yes|YES)
+            if /bin/bash "$REPO_DIR/bin/setup-ssh" install; then
+                :
+            else
+                SSH_SETUP_STATUS=$?
+                echo 'Shared SSH configuration stopped; terminal setup remains installed.' >&2
+                exit "$SSH_SETUP_STATUS"
+            fi
+            ;;
+        *) echo 'Shared SSH configuration skipped.' ;;
+    esac
+fi

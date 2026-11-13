@@ -17,6 +17,8 @@ and WSL distributions with Bash/Zsh. On WSL, run inside Linux, not PowerShell.
    GitHub and raw.githubusercontent.com; GitHub SSH keys are not required.
    On macOS, after terminal setup finishes, you can optionally restore the
    applications and tools in `Brewfile` with the two confirmations described below.
+   The final optional step on every platform offers shared SSH configuration;
+   Enter skips it. No shared directory is required for terminal setup.
 3. Run `exec zsh` or open a terminal configured to launch Zsh. The installer does
    not change your login shell; on Linux, optionally run `chsh -s "$(command -v zsh)"`
    and log in again to make Zsh the default.
@@ -130,6 +132,78 @@ installed separately if you use them.
 To restore a backed-up file, remove its current replacement and copy the matching
 file from the printed backup directory using `cp -Pp`. Files that did not exist
 before setup will not appear in that backup directory.
+
+## Shared SSH configuration (optional)
+
+At the end of an interactive `./setup.sh`, answer the final question
+`是否配置共享 SSH 配置？[y/N]` to opt in. Non-interactive setup skips this step.
+The helper looks for `config/ssh/hosts.conf` under `~/Seafile/server-sync`,
+`~/server-sync`, `~/projects/server-sync`, and `~/Projects/server-sync`.
+It confirms one candidate, asks you to choose among multiple candidates, or lets
+you enter a path or skip. It never creates a sync library or writes to the source.
+The file can live anywhere; Seafile is just one common location.
+
+Prepare your shared file explicitly, using only portable host settings, for example:
+
+```sshconfig
+Host dev-server
+    HostName example.com
+    User example-user
+    IdentityFile ~/.ssh/example_key
+    IdentitiesOnly yes
+```
+
+For machines already set up, use the independent commands:
+
+```sh
+bin/setup-ssh install --source /absolute/path/to/hosts.conf
+bin/setup-ssh status
+bin/setup-ssh status --source /absolute/path/to/hosts.conf
+# Explicitly back up and replace conflicting files, or refresh a copied configuration:
+bin/setup-ssh replace --source /absolute/path/to/hosts.conf
+```
+
+`install` creates `~/.ssh/config` as an Include entry point and
+`~/.ssh/config.shared` as a link to the source. An optional `~/.ssh/config.local`
+is read first and is never created, merged, or replaced. Put machine-specific
+Keychain, agent socket, and proxy settings there. Most SSH options use the first
+value found; `IdentityFile` entries accumulate, so avoid conflicting identity
+declarations across the local and shared files. Each device supplies its own local
+keys; this feature never copies keys, `known_hosts`, or `authorized_keys`.
+
+An exact existing entry and matching shared link/copy are a no-op on repeat runs.
+Other existing files, modified entries, different/broken links, and directories
+stop default installation. Directories and a symlinked `~/.ssh` are never replaced,
+even with `replace`. Keep the source outside `~/.ssh` and pass the actual source
+file, not a symlink to it. Source availability and hostname resolution remain
+requirements for using the configured hosts.
+Home directories with spaces are supported. A physical SSH configuration directory
+containing `*`, `?`, `[` or `]` is rejected before changes, because OpenSSH expands
+Include paths as glob patterns even when quoted. These characters may still appear
+in the shared source's path, which is reached through the installed link or copy.
+For the generated entry, the common host completer used by `ssh`, `scp`, and
+`sshk` reads `config.local` and `config.shared` directly to work around macOS
+Zsh's quoted-Include parsing. Explicit `-F` configuration files retain native completion.
+
+`replace` validates the new Include configuration with `ssh -G`, then backs up
+affected files to a unique `~/.ssh-config-backup-*` directory before activation.
+Backups preserve original symlinks and also snapshot readable regular-file targets.
+A failed activation restores the affected files; existing `config.local` stays intact.
+An ordinary SSH configuration is not automatically imported into the shared source
+or into `config.local`: prepare those files before explicitly replacing the entry.
+Both successful SSH installation and skipping preserve the earlier terminal setup;
+a selected SSH step that fails reports a nonzero exit without undoing terminal setup.
+
+On macOS and Linux filesystems, link mode makes shared edits available immediately.
+On WSL, a source under `/mnt/<drive>/...` defaults to copy mode, so the installed
+file has Linux permissions. `--mode link|copy` overrides the default.
+Copy mode is a snapshot: refresh with `replace`; `status --source ...` compares
+against the source, while plain `status` checks only the installed copy.
+There is no background sync job or installation database. Configuration checks
+parse SSH settings; they do not test logins or guarantee every conditional block.
+If an interrupted operation leaves `~/.ssh/.setup-ssh.lock`, ensure no installer is
+running, inspect any backup and target files, then remove the empty lock directory
+before retrying. Power loss and SIGKILL cannot trigger automatic rollback.
 
 ## SSH with a temporary agent
 

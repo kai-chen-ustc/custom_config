@@ -13,7 +13,8 @@ ROOT = Path(__file__).resolve().parents[1]
 class SetupRestoreTest(unittest.TestCase):
     def run_setup(self, platform='Darwin', answers='y\nINSTALL\n', interactive=True,
                   brew_status=0, brew_present=True, arch='arm64',
-                  download_status=0, installer_status=0):
+                  download_status=0, installer_status=0, ssh_answers='\n',
+                  shared_source=False, existing_ssh=False, repeat=False):
         with tempfile.TemporaryDirectory() as directory:
             tmp = Path(directory)
             repo = tmp / 'repo with spaces'
@@ -25,6 +26,7 @@ class SetupRestoreTest(unittest.TestCase):
             (repo / 'setup.sh').write_text(script)
             shutil.copy2(ROOT / 'Brewfile', repo)
             (repo / 'bin').mkdir()
+            shutil.copy2(ROOT / 'bin/setup-ssh', repo / 'bin/setup-ssh')
             helper = (ROOT / 'bin/restore-apps').read_text()
             helper = helper.replace('/Applications', '/EmptyApplications').replace('/Library/Input', '/EmptyLibrary/Input')
             (repo / 'bin/restore-apps').write_text(helper)
@@ -38,6 +40,13 @@ class SetupRestoreTest(unittest.TestCase):
             (user_dir / '.oh-my-zsh').mkdir(parents=True)
             (user_dir / '.oh-my-zsh/oh-my-zsh.sh').touch()
             (user_dir / '.zshrc').write_text('export PERSONAL_SETTING=preserved\n')
+            if shared_source:
+                source = user_dir / 'Seafile/server-sync/config/ssh/hosts.conf'
+                source.parent.mkdir(parents=True)
+                source.write_text('Host dev-server\n    User example-user\n')
+            if existing_ssh:
+                (user_dir / '.ssh').mkdir()
+                (user_dir / '.ssh/config').write_text('Host existing-server\n')
             mock_bin = tmp / 'bin'
             mock_bin.mkdir()
             scripts = {
@@ -82,7 +91,8 @@ class SetupRestoreTest(unittest.TestCase):
                                            stdout=subprocess.PIPE, stderr=subprocess.PIPE)
                 os.close(slave)
                 try:
-                    os.write(master, answers.encode())
+                    # The SSH question follows the app questions on macOS only.
+                    os.write(master, ((answers if platform == 'Darwin' else '') + ssh_answers).encode())
                     stdout, stderr = process.communicate(timeout=10)
                 finally:
                     if process.poll() is None:
@@ -95,12 +105,55 @@ class SetupRestoreTest(unittest.TestCase):
                                         env=env, input=answers.encode(), capture_output=True,
                                         timeout=10)
                 code, stdout, stderr = result.returncode, result.stdout, result.stderr
+            if repeat and code == 0:
+                master, slave = pty.openpty()
+                process = subprocess.Popen(['/bin/bash', str(repo / 'setup.sh')], env=env,
+                                           stdin=slave, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                os.close(slave)
+                try:
+                    os.write(master, (('n\n' if platform == 'Darwin' else '') + ssh_answers).encode())
+                    stdout, stderr = process.communicate(timeout=10)
+                finally:
+                    if process.poll() is None:
+                        process.kill()
+                        process.wait()
+                    os.close(master)
+                code = process.returncode
+            if existing_ssh:
+                self.assertEqual((user_dir / '.ssh/config').read_text(), 'Host existing-server\n')
+            elif interactive and shared_source and ssh_answers.startswith('y\ny\n'):
+                self.assertTrue((user_dir / '.ssh/config.shared').is_symlink())
+            else:
+                self.assertFalse((user_dir / '.ssh').exists())
             content = (user_dir / '.zshrc').read_text()
             self.assertIn('export PERSONAL_SETTING=preserved', content)
             self.assertIn('source "$ZSH/oh-my-zsh.sh"', content)
             calls = (tmp / 'calls').read_text().splitlines() if (tmp / 'calls').exists() else []
             self.assertFalse(any('unexpected' in call for call in calls), calls)
             return code, (stdout + stderr).decode(), calls, str(repo)
+
+    def test_optional_shared_ssh_on_both_platforms_and_setup_repeat(self):
+        for platform in ('Darwin', 'Linux'):
+            with self.subTest(platform=platform):
+                code, output, _, _ = self.run_setup(
+                    platform=platform, answers='n\n', shared_source=True,
+                    ssh_answers='y\ny\n', repeat=True)
+                self.assertEqual(code, 0, output)
+                self.assertIn('already configured', output)
+                self.assertIn('是否配置共享 SSH 配置', output)
+                self.assertNotIn('是否配置 Seafile', output)
+
+    def test_shared_ssh_conflict_preserves_existing_setup(self):
+        code, output, _, _ = self.run_setup(answers='n\n', shared_source=True,
+                                           existing_ssh=True, ssh_answers='y\ny\n')
+        self.assertNotEqual(code, 0)
+        self.assertIn('terminal setup remains installed', output)
+        self.assertIn('use replace', output)
+
+    def test_missing_shared_source_can_skip_without_creating_ssh_directory(self):
+        code, output, _, _ = self.run_setup(answers='n\n', ssh_answers='y\n\n')
+        self.assertEqual(code, 0, output)
+        self.assertIn('No shared configuration found', output)
 
     def test_linux_and_unattended_skip_even_with_yes_input(self):
         for platform, interactive in [('Linux', True), ('Darwin', False)]:
