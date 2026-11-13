@@ -171,6 +171,25 @@ value found; `IdentityFile` entries accumulate, so avoid conflicting identity
 declarations across the local and shared files. Each device supplies its own local
 keys; this feature never copies keys, `known_hosts`, or `authorized_keys`.
 
+Keep account-specific GitHub aliases (for example, `github-work` and
+`github-personal`) in the shared file. Choose the default account for
+`git@github.com:...` separately on each machine in `~/.ssh/config.local`:
+
+```sshconfig
+Host github.com
+    HostName github.com
+    User git
+    IdentityFile ~/.ssh/example_work_key
+    IdentitiesOnly yes
+```
+
+Remove the corresponding `Host github.com` identity block from the shared file;
+adding a local identity does not override a shared `IdentityFile`, because those
+entries accumulate. Each new machine must prepare its own keys and default-account
+block; setup does not select an account automatically. Without that local block,
+SSH falls back to its usual key selection, which may authenticate a different
+account. Use an explicit account alias until the local default is configured.
+
 An exact existing entry and matching shared link/copy are a no-op on repeat runs.
 Other existing files, modified entries, different/broken links, and directories
 stop default installation. Directories and a symlinked `~/.ssh` are never replaced,
