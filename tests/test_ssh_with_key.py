@@ -1,6 +1,8 @@
 import json
 import os
 from pathlib import Path
+import select
+import socket
 import subprocess
 import sys
 import time
@@ -30,7 +32,10 @@ class SSHWithKeyTest(unittest.TestCase):
                 'assert "-T" in sys.argv and "BatchMode=yes" in sys.argv\n'
                 'os.environ["HOME"] = os.environ["TEST_REMOTE"]\n'
                 'if os.environ.get("NO_FORWARD"): os.environ.pop("SSH_AUTH_SOCK", None)\n'
-                'sys.exit(subprocess.run(["sh", "-c", sys.argv[-1]]).returncode)\n')
+                'result = subprocess.run(["sh", "-c", sys.argv[-1]])\n'
+                'sock = os.environ.get("SSH_AUTH_SOCK")\n'
+                'if sock and os.path.exists(sock): os.unlink(sock)\n'
+                'sys.exit(result.returncode)\n')
             for name in ('ssh', 'ssh-add'):
                 (tmp / name).chmod(0o755)
             env = dict(os.environ, PATH=f'{tmp}:{os.environ["PATH"]}',
@@ -57,6 +62,103 @@ class SSHWithKeyTest(unittest.TestCase):
             result = subprocess.run(args, env=env, capture_output=True, text=True)
             self.assertNotEqual(result.returncode, 0)
             self.assertEqual(link.read_text(), 'keep this file')
+
+    def test_hc_last_connection_wins_without_probes_or_fallback(self):
+        with tempfile.TemporaryDirectory() as directory:
+            tmp = Path(directory)
+            remote = tmp / 'remote'
+            (remote / '.ssh').mkdir(parents=True)
+            key = tmp / 'key'
+            key.touch()
+            (tmp / 'ssh-add').write_text(
+                '#!/bin/sh\nif [ "$1" = -l ]; then\n'
+                ' echo probed > "$TEST_PROBE"; exit 99\nfi\nexit 0\n')
+            (tmp / 'ssh').write_text(
+                f'#!{sys.executable}\nimport os, pathlib, subprocess, sys\n'
+                'os.environ["HOME"] = os.environ["TEST_REMOTE"]\n'
+                'pathlib.Path(os.environ["TEST_SOCKET"]).write_text(os.environ["SSH_AUTH_SOCK"])\n'
+                'r = subprocess.run(["sh", "-c", sys.argv[-1]])\n'
+                'pathlib.Path(os.environ["SSH_AUTH_SOCK"]).unlink(missing_ok=True)\n'
+                'sys.exit(r.returncode)\n')
+            for name in ('ssh', 'ssh-add'):
+                (tmp / name).chmod(0o755)
+            env = dict(os.environ, PATH=f'{tmp}:{os.environ["PATH"]}',
+                       TEST_REMOTE=str(remote), TEST_PROBE=str(tmp / 'probe'),
+                       TMUX_PANE='')
+            args = [str(SCRIPT), '--hc', '--key', str(key), 'host',
+                    'printf "ready\\n"; cat']
+            link = remote / '.ssh/hc-forwarded-agent.sock'
+            # An existing socket that never replies must not block a new login.
+            stalled = socket.socket(socket.AF_UNIX)
+            stalled.bind(str(tmp / 'stalled'))
+            stalled.listen()
+            link.symlink_to(tmp / 'stalled')
+            processes = []
+
+            def start(name):
+                p = subprocess.Popen(args, env=dict(env, TEST_SOCKET=str(tmp / name)),
+                                     stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                     stderr=subprocess.PIPE, text=True)
+                processes.append(p)
+                return p
+
+            def ready(p):
+                self.assertTrue(select.select([p.stdout], [], [], 5)[0],
+                                'bootstrap blocked before starting the command')
+                self.assertEqual(p.stdout.readline(), 'ready\n')
+
+            def finish(p):
+                stdout, stderr = p.communicate('protocol bytes\n', timeout=5)
+                self.assertEqual(p.returncode, 0, stderr)
+                self.assertEqual(stdout, 'protocol bytes\n')
+
+            try:
+                first = start('first')
+                ready(first)
+                first_socket = os.readlink(link)
+                second = start('second')
+                ready(second)
+                second_socket = os.readlink(link)
+                self.assertNotEqual(first_socket, second_socket)
+                finish(first)
+                self.assertEqual(os.readlink(link), second_socket)
+                self.assertTrue(link.is_socket())
+
+                # Both simultaneous logins may start; the last publication wins.
+                third = start('third')
+                fourth = start('fourth')
+                ready(third)
+                ready(fourth)
+                sockets = [(tmp / name).read_text() for name in ('third', 'fourth')]
+                selected = os.readlink(link)
+                self.assertIn(selected, sockets)
+                winner, loser = (third, fourth) if selected == sockets[0] else (fourth, third)
+                finish(loser)
+                self.assertEqual(os.readlink(link), selected)
+                finish(winner)
+                self.assertEqual(os.readlink(link), selected)
+                self.assertFalse(
+                    link.exists(), 'no automatic fallback to the still-live second connection')
+                self.assertIsNone(second.poll())
+
+                reconnected = start('reconnected')
+                ready(reconnected)
+                replacement = os.readlink(link)
+                self.assertTrue(link.is_socket())
+                finish(second)
+                self.assertEqual(os.readlink(link), replacement)
+                finish(reconnected)
+                self.assertFalse((tmp / 'probe').exists(), 'previous agents must not be probed')
+                self.assertFalse(list((remote / '.ssh').glob('.hc-agent.*')))
+                self.assertFalse((remote / '.ssh/hc-forwarded-agents').exists())
+            finally:
+                stalled.close()
+                for p in processes:
+                    if p.poll() is None:
+                        p.communicate('', timeout=5)
+                    for stream in (p.stdin, p.stdout, p.stderr):
+                        if stream and not stream.closed:
+                            stream.close()
 
     def test_agent_lifecycle_and_arguments(self):
         # Use a real agent, but never load private keys or connect to a server.

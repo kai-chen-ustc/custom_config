@@ -287,7 +287,12 @@ records in the private synced `server-sync/deploy/herdr/README.md`, outside this
 public repository. The remote shell block is tracked
 in [config/remote/hc-agent.zsh](config/remote/hc-agent.zsh).
 
-For a Herdr desktop / `hc` machine, use the script's absolute path with `--hc`:
+For a Windows Herdr window with agents and SSH kept in WSL, first see
+[Windows Herdr with a WSL backend](docs/remote-config.md#windows-herdr-with-a-wsl-backend).
+That local connection uses `wsl.exe` and does not require Windows SSH keys.
+
+For a Herdr desktop / `hc` connection to an SSH server, use the script's absolute
+path with `--hc`:
 
 ```sh
 hc machine add --name dev \
@@ -313,10 +318,15 @@ fi
 
 New terminals inherit the fixed path. In an existing shell, run the export once;
 already-running programs retain their environment. After reconnection, shells
-using the fixed path can use the replacement agent without restarting. Git cannot
-use it while the forwarding connection is down. This is one forwarded identity
-per remote Unix account: the latest `--hc` connection replaces the link, so do not
-use competing connections or short-lived `--hc` probes for the same account.
+using the fixed path can use the replacement agent without restarting.
+Each `--hc` connection atomically publishes its forwarded socket: the last
+publication wins, including automatic reconnects. Other clients can keep using
+the same Herdr spaces and terminals. Disconnecting a client never changes the
+link. If the selected connection ends, authentication is unavailable until a
+client reconnects; there is no automatic fallback to another live connection.
+The wrapper does not probe the previous agent, maintain a candidate pool, or
+compare client identities. Use the same intended key on each client: publishing
+a different key changes the identity available to all shared terminals.
 This Zsh setup does not change the environment of non-interactive `hc exec`
 commands. Other shells need the equivalent startup configuration.
 

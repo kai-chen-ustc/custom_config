@@ -102,8 +102,8 @@ if [ -d "$link" ] || { [ -e "$link" ] && [ ! -L "$link" ]; }; then
     echo "sshk --hc: refusing to replace a non-symlink: $link" >&2
     exit 1
 fi
-# Publish atomically; leave the link on disconnect so existing shells recover
-# when the next connection replaces it. One forwarding connection per account.
+# Last publication wins, including reconnects. Leave the link on disconnect;
+# only a new connection may replace it, never cleanup from an older one.
 scratch=$(mktemp -d "$HOME/.ssh/.hc-agent.XXXXXX")
 trap 'rm -f "$scratch/socket"; rmdir "$scratch"' 0
 ln -s "$SSH_AUTH_SOCK" "$scratch/socket"
