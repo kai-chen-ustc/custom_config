@@ -1,5 +1,5 @@
 config/zshrc
 config/omz_custom/plugins/
 
-# Private deployment inventory; public instructions live beside it.
+# Keep private deployment notes out of this public repository.
 /docs/remote-config.local.md

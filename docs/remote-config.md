@@ -1,12 +1,12 @@
 # Remote configuration guide
 
-This public guide uses example host names and paths. Keep actual host names,
-account names, key paths, and backup locations in `docs/remote-config.local.md`,
-which is excluded from Git. Never store private keys or credentials in either file.
-The versioned source of the remote Zsh block is
-[`config/remote/hc-agent.zsh`](../config/remote/hc-agent.zsh).
-Editing that file does **not** automatically update a server. Keep the deployed
-block and your local deployment record in sync when making changes.
+This public guide uses example host names and paths. Actual hosts, accounts,
+key paths, backups, and validation results belong in the private Seafile record
+`server-sync/deploy/herdr/README.md`. Neither document should contain credentials.
+
+The remote Zsh block's source is
+[`config/remote/hc-agent.zsh`](../config/remote/hc-agent.zsh). Deploy changes
+explicitly and update the snapshot and deployment record in `server-sync/deploy/herdr/`.
 
 ## Example: hc SSH agent forwarding
 
@@ -36,7 +36,7 @@ hc terminals at that link. The temporary `/tmp/ssh-…/agent.…` target changes
 reconnection and must not be hard-coded or backed up. No private key is copied
 to the server.
 
-### Restore on a rebuilt machine
+### Configure a machine
 
 1. Ensure ordinary SSH login and agent forwarding work for the host, and hc is
    installed on the remote machine.
@@ -78,9 +78,9 @@ The first command should print the absolute path to
 the account associated with the selected key; its successful authentication greeting normally still exits with
 status 1 because GitHub provides no interactive shell.
 
-Validation covered a new hc terminal and the **same terminal after
-an actual SSH transport disconnect and automatic reconnect**. The symlink target
-changed, and GitHub authentication succeeded again without resetting the shell.
+Verify both a new terminal and the **same terminal after SSH reconnects**.
+The symlink target should change, and authentication should work without
+resetting the shell environment.
 
 - A GPG agent socket such as `/run/user/<uid>/gnupg/S.gpg-agent.ssh` means the shell has not applied the block.
 - A broken fixed symlink means the forwarding connection is down or has not yet

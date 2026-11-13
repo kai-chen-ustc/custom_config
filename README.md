@@ -133,9 +133,8 @@ before setup will not appear in that backup directory.
 
 ## SSH with a temporary agent
 
-After pulling this update, open a new Zsh terminal or run `source ~/.zshrc`.
-No setup rerun is needed for an existing installation. Later changes to the
-script take effect on the next invocation, without reloading Zsh.
+Open a new Zsh terminal or run `source ~/.zshrc` to load the `sshk` function
+and completion. Script changes take effect on the next invocation.
 
 ```sh
 sshk dev-server
@@ -191,7 +190,8 @@ run `ssh-add -l` on the remote host to verify the expected key fingerprint.
 
 Setup, verification, and rollback are documented in
 [Remote configuration](docs/remote-config.md). Keep host-specific deployment
-records in the Git-ignored `docs/remote-config.local.md`. The remote shell block is tracked
+records in the private synced `server-sync/deploy/herdr/README.md`, outside this
+public repository. The remote shell block is tracked
 in [config/remote/hc-agent.zsh](config/remote/hc-agent.zsh).
 
 For a Herdr desktop / `hc` machine, use the script's absolute path with `--hc`:
