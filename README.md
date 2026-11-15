@@ -305,8 +305,9 @@ Key loading must succeed without a prompt; encrypted keys that cannot be unlocke
 non-interactively fail instead of waiting for input. Output on stdout remains
 reserved for hc's protocol.
 
-On each connection it atomically updates the remote symlink
-`~/.ssh/hc-forwarded-agent.sock` to that connection's forwarded agent socket.
+On each connection it checks the remote symlink `~/.ssh/hc-forwarded-agent.sock`.
+A responding agent with at least one key is kept. Otherwise, the new forwarded
+agent must pass the same check before the link is atomically replaced.
 Only the socket path is written remotely, never the private key. Add this at the
 end of the remote user's `~/.zshrc` for hc's interactive Zsh terminals:
 
@@ -319,14 +320,20 @@ fi
 New terminals inherit the fixed path. In an existing shell, run the export once;
 already-running programs retain their environment. After reconnection, shells
 using the fixed path can use the replacement agent without restarting.
-Each `--hc` connection atomically publishes its forwarded socket: the last
-publication wins, including automatic reconnects. Other clients can keep using
-the same Herdr spaces and terminals. Disconnecting a client never changes the
-link. If the selected connection ends, authentication is unavailable until a
-client reconnects; there is no automatic fallback to another live connection.
-The wrapper does not probe the previous agent, maintain a candidate pool, or
-compare client identities. Use the same intended key on each client: publishing
-a different key changes the identity available to all shared terminals.
+Checks use remote `ssh-add -l`, each with a two-second timeout and no protocol
+output or input consumption. No extra package is required. Other clients can
+keep using the same Herdr spaces and terminals without replacing a healthy agent.
+Disconnecting a client never changes the link. If the selected connection ends
+or stalls, authentication is unavailable until a client reconnects; there is no
+automatic fallback to another live connection. Creating a workspace does not
+reconnect the transport. There is no candidate pool, monitor, or identity
+comparison: all clients must use the same intended key. A successful key listing
+does not guarantee that signing or repository access will succeed.
+If the new agent is empty or unavailable, the link stays unchanged and hc still
+starts, with a warning on stderr. Concurrent publications use a short-lived
+remote directory lock; a busy lock skips selection without blocking hc.
+See the remote guide for lock recovery and reconnect details. Update the wrapper
+on every connecting device; an older wrapper can still overwrite a healthy link.
 This Zsh setup does not change the environment of non-interactive `hc exec`
 commands. Other shells need the equivalent startup configuration.
 

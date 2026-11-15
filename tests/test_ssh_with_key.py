@@ -1,7 +1,6 @@
 import json
 import os
 from pathlib import Path
-import select
 import socket
 import subprocess
 import sys
@@ -24,7 +23,8 @@ class SSHWithKeyTest(unittest.TestCase):
             remote = tmp / "remote home with 'quotes'"
             remote.mkdir()
             (tmp / 'ssh-add').write_text(
-                '#!/bin/sh\n[ "$SSH_ASKPASS_REQUIRE" = force ] || exit 1\n'
+                '#!/bin/sh\n[ "$1" = -l ] && exit 0\n'
+                '[ "$SSH_ASKPASS_REQUIRE" = force ] || exit 1\n'
                 '[ "$SSH_ASKPASS" = /usr/bin/false ] || exit 1\n'
                 'test -z "$(cat)"\n')
             (tmp / 'ssh').write_text(
@@ -39,7 +39,7 @@ class SSHWithKeyTest(unittest.TestCase):
             for name in ('ssh', 'ssh-add'):
                 (tmp / name).chmod(0o755)
             env = dict(os.environ, PATH=f'{tmp}:{os.environ["PATH"]}',
-                       TEST_REMOTE=str(remote), TMUX_PANE='')
+                       HOME=str(tmp), TEST_REMOTE=str(remote), TMUX_PANE='')
             command = 'printf "%s\\n" "it\'s intact"; cat; exit 17'
             args = [str(SCRIPT), '--hc', '--key', str(key), 'host', command]
             link = remote / '.ssh/hc-forwarded-agent.sock'
@@ -63,102 +63,132 @@ class SSHWithKeyTest(unittest.TestCase):
             self.assertNotEqual(result.returncode, 0)
             self.assertEqual(link.read_text(), 'keep this file')
 
-    def test_hc_last_connection_wins_without_probes_or_fallback(self):
+    def test_hc_keeps_healthy_agent_and_replaces_only_with_healthy_agent(self):
         with tempfile.TemporaryDirectory() as directory:
             tmp = Path(directory)
             remote = tmp / 'remote'
             (remote / '.ssh').mkdir(parents=True)
             key = tmp / 'key'
             key.touch()
+            # Fake queries model healthy, empty, failed and unresponsive agents.
             (tmp / 'ssh-add').write_text(
-                '#!/bin/sh\nif [ "$1" = -l ]; then\n'
-                ' echo probed > "$TEST_PROBE"; exit 99\nfi\nexit 0\n')
+                f'#!{sys.executable}\nimport os, pathlib, sys, time\n'
+                'if sys.argv[1:] != ["-l"]: sys.exit(0)\n'
+                'assert not sys.stdin.read(), "probe consumed protocol input"\n'
+                'p = pathlib.Path(os.environ["SSH_AUTH_SOCK"]).resolve()\n'
+                'mode = p.with_suffix(".mode").read_text()\n'
+                'with open(os.environ["TEST_PROBES"], "a") as log:\n'
+                ' log.write(str(p) + "\\n")\n'
+                'print("probe output must stay off the protocol")\n'
+                'if mode == "hang":\n'
+                ' p.with_suffix(".pid").write_text(str(os.getpid()))\n'
+                ' time.sleep(60)\n'
+                'sys.exit({"healthy": 0, "empty": 1, "error": 2}.get(mode, 3))\n')
             (tmp / 'ssh').write_text(
-                f'#!{sys.executable}\nimport os, pathlib, subprocess, sys\n'
+                f'#!{sys.executable}\nimport os, subprocess, sys\n'
                 'os.environ["HOME"] = os.environ["TEST_REMOTE"]\n'
-                'pathlib.Path(os.environ["TEST_SOCKET"]).write_text(os.environ["SSH_AUTH_SOCK"])\n'
-                'r = subprocess.run(["sh", "-c", sys.argv[-1]])\n'
-                'pathlib.Path(os.environ["SSH_AUTH_SOCK"]).unlink(missing_ok=True)\n'
-                'sys.exit(r.returncode)\n')
+                'os.environ["SSH_AUTH_SOCK"] = os.environ["TEST_SOCKET"]\n'
+                'sys.exit(subprocess.call(["sh", "-c", sys.argv[-1]]))\n')
             for name in ('ssh', 'ssh-add'):
                 (tmp / name).chmod(0o755)
             env = dict(os.environ, PATH=f'{tmp}:{os.environ["PATH"]}',
-                       TEST_REMOTE=str(remote), TEST_PROBE=str(tmp / 'probe'),
-                       TMUX_PANE='')
-            args = [str(SCRIPT), '--hc', '--key', str(key), 'host',
-                    'printf "ready\\n"; cat']
+                       HOME=str(tmp), TEST_REMOTE=str(remote),
+                       TEST_PROBES=str(tmp / 'probes'), TMUX_PANE='')
+            args = [str(SCRIPT), '--hc', '--key', str(key), 'host', 'cat; exit 17']
             link = remote / '.ssh/hc-forwarded-agent.sock'
-            # An existing socket that never replies must not block a new login.
-            stalled = socket.socket(socket.AF_UNIX)
-            stalled.bind(str(tmp / 'stalled'))
-            stalled.listen()
-            link.symlink_to(tmp / 'stalled')
-            processes = []
+            lock = remote / '.ssh/.hc-agent.lock'
+            sockets = []
 
-            def start(name):
-                p = subprocess.Popen(args, env=dict(env, TEST_SOCKET=str(tmp / name)),
-                                     stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                                     stderr=subprocess.PIPE, text=True)
-                processes.append(p)
-                return p
+            def agent(name, mode):
+                path = tmp / name
+                sock = socket.socket(socket.AF_UNIX)
+                sockets.append(sock)
+                sock.bind(str(path))
+                path.with_suffix('.mode').write_text(mode)
+                return path
 
-            def ready(p):
-                self.assertTrue(select.select([p.stdout], [], [], 5)[0],
-                                'bootstrap blocked before starting the command')
-                self.assertEqual(p.stdout.readline(), 'ready\n')
-
-            def finish(p):
-                stdout, stderr = p.communicate('protocol bytes\n', timeout=5)
-                self.assertEqual(p.returncode, 0, stderr)
-                self.assertEqual(stdout, 'protocol bytes\n')
+            def connect(path):
+                started = time.monotonic()
+                result = subprocess.run(args, env=dict(env, TEST_SOCKET=str(path)),
+                                        input='protocol bytes\n', capture_output=True,
+                                        text=True, timeout=7)
+                self.assertEqual(result.returncode, 17, result.stderr)
+                self.assertEqual(result.stdout, 'protocol bytes\n')
+                self.assertLess(time.monotonic() - started, 6)
+                self.assertFalse(lock.exists())
+                return result
 
             try:
-                first = start('first')
-                ready(first)
-                first_socket = os.readlink(link)
-                second = start('second')
-                ready(second)
-                second_socket = os.readlink(link)
-                self.assertNotEqual(first_socket, second_socket)
-                finish(first)
-                self.assertEqual(os.readlink(link), second_socket)
-                self.assertTrue(link.is_socket())
+                first = agent('first', 'healthy')
+                second = agent('second', 'healthy')
+                empty = agent('empty', 'empty')
+                failed = agent('failed', 'error')
+                stalled = agent('stalled', 'hang')
+                connect(first)
+                self.assertEqual(link.readlink(), first)
+                connect(second)
+                self.assertEqual(link.readlink(), first)
+                self.assertNotIn(str(second), (tmp / 'probes').read_text())
+                connect(stalled)
+                self.assertEqual(link.readlink(), first)
+                self.assertFalse(stalled.with_suffix('.pid').exists())
 
-                # Both simultaneous logins may start; the last publication wins.
-                third = start('third')
-                fourth = start('fourth')
-                ready(third)
-                ready(fourth)
-                sockets = [(tmp / name).read_text() for name in ('third', 'fourth')]
-                selected = os.readlink(link)
-                self.assertIn(selected, sockets)
-                winner, loser = (third, fourth) if selected == sockets[0] else (fourth, third)
-                finish(loser)
-                self.assertEqual(os.readlink(link), selected)
-                finish(winner)
-                self.assertEqual(os.readlink(link), selected)
-                self.assertFalse(
-                    link.exists(), 'no automatic fallback to the still-live second connection')
-                self.assertIsNone(second.poll())
+                # An unusable arrival cannot replace an unusable selected agent.
+                first.with_suffix('.mode').write_text('empty')
+                for candidate in (empty, failed, stalled):
+                    result = connect(candidate)
+                    self.assertEqual(link.readlink(), first)
+                    self.assertIn('new agent unavailable or empty', result.stderr)
+                with self.assertRaises(ProcessLookupError):
+                    os.kill(int(stalled.with_suffix('.pid').read_text()), 0)
 
-                reconnected = start('reconnected')
-                ready(reconnected)
-                replacement = os.readlink(link)
-                self.assertTrue(link.is_socket())
-                finish(second)
-                self.assertEqual(os.readlink(link), replacement)
-                finish(reconnected)
-                self.assertFalse((tmp / 'probe').exists(), 'previous agents must not be probed')
-                self.assertFalse(list((remote / '.ssh').glob('.hc-agent.*')))
-                self.assertFalse((remote / '.ssh/hc-forwarded-agents').exists())
+                # A socket may still exist while its forwarded agent never responds.
+                first.with_suffix('.mode').write_text('hang')
+                connect(second)
+                self.assertEqual(link.readlink(), second)
+                with self.assertRaises(ProcessLookupError):
+                    os.kill(int(first.with_suffix('.pid').read_text()), 0)
+                second.unlink()
+                self.assertFalse(link.exists(), 'no automatic fallback after selection')
+                first.with_suffix('.mode').write_text('healthy')
+                connect(first)
+                self.assertEqual(link.readlink(), first)
+
+                # Concurrent reconnects serialize publication; both protocols start.
+                link.unlink()
+                second = agent('replacement', 'healthy')
+                processes = [subprocess.Popen(args, env=dict(env, TEST_SOCKET=str(p)),
+                             stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                             stderr=subprocess.PIPE, text=True) for p in (first, second)]
+                try:
+                    for proc in processes:
+                        stdout, stderr = proc.communicate('protocol bytes\n', timeout=7)
+                        self.assertEqual(proc.returncode, 17, stderr)
+                        self.assertEqual(stdout, 'protocol bytes\n')
+                    selected = link.readlink()
+                    self.assertIn(selected, (first, second))
+                    connect(second if selected == first else first)
+                    self.assertEqual(link.readlink(), selected)
+                finally:
+                    for proc in processes:
+                        if proc.poll() is None:
+                            proc.kill()
+                        proc.communicate()
+
+                # A busy/stale lock never blocks hc or gets removed by a non-owner.
+                lock.mkdir()
+                result = subprocess.run(args, env=dict(env, TEST_SOCKET=str(first)),
+                                        input='protocol bytes\n', capture_output=True,
+                                        text=True, timeout=3)
+                self.assertEqual(result.returncode, 17, result.stderr)
+                self.assertEqual(result.stdout, 'protocol bytes\n')
+                self.assertIn('agent selection locked', result.stderr)
+                self.assertTrue(lock.is_dir())
+                self.assertEqual(link.readlink(), selected)
+                lock.rmdir()
             finally:
-                stalled.close()
-                for p in processes:
-                    if p.poll() is None:
-                        p.communicate('', timeout=5)
-                    for stream in (p.stdin, p.stdout, p.stderr):
-                        if stream and not stream.closed:
-                            stream.close()
+                for sock in sockets:
+                    sock.close()
 
     def test_agent_lifecycle_and_arguments(self):
         # Use a real agent, but never load private keys or connect to a server.

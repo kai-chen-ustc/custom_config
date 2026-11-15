@@ -106,22 +106,44 @@ first. Do not disable host-key checking or publish the address in this repositor
 
 ### Multiple viewers and agent availability
 
-Each connection atomically replaces the stable link with its own forwarded socket.
-The last publication wins, including background reconnects; window focus does not
-select an agent. Concurrent clients can still share the same core and terminals.
-No previous agent is probed, and there is no candidate pool, monitor, or identity
-comparison. Choose the same intended key on each client: a different key replaces
-the identity available to every terminal using the stable path.
+Each connection checks the agent selected by the stable link with `ssh-add -l`.
+If it responds with at least one key, the link stays unchanged. Otherwise the
+new connection's forwarded agent must pass the same check before an atomic
+replacement. Each query has a two-second timeout, with stdin disconnected and
+output suppressed so hc's protocol remains intact. This uses standard shell
+commands and OpenSSH, including on macOS; no `timeout` package is required.
 
-Disconnecting any client leaves the link unchanged. If the selected connection
-ends, Git/SSH authentication through that link fails until a client reconnects,
-even if another client remains connected. Closing an older connection does not
-undo a newer connection's selection. Remote programs continue running; a failed
-authentication operation may need retrying after reconnection.
+Concurrent clients can still share the same core and terminals. A short-lived
+`~/.ssh/.hc-agent.lock` directory serializes checking and replacement; a competing
+connection skips selection and starts hc with a warning. If the lock owner fails
+to publish a working agent, reconnect after it releases the lock to try again.
+An empty, failed or unresponsive new agent also leaves the link unchanged and
+starts hc with a warning. A missing forwarded socket or a non-symlink at the
+stable path remains an error.
 
-After changing the wrapper, reconnect the affected transports: updating the local
-script alone does not change a running remote bootstrap. Keep the remote core and
-user terminals running while reconnecting.
+There is no candidate pool, monitor, or identity comparison. Choose the same
+intended key on each client. The check verifies key listing, not signing or
+repository permissions. Disconnecting any client leaves the link unchanged.
+If the selected connection ends or stalls, Git/SSH authentication fails until
+a client reconnects, even if another client remains connected. Remote programs
+continue running; an already-stuck authentication operation may need interrupting
+and retrying after reconnection.
+
+Update the wrapper on every connecting device: an old wrapper still overwrites
+the link unconditionally. Reconnect affected transports to use the new bootstrap;
+keep the remote core and user terminals running. A new workspace reuses the
+machine transport and does not trigger selection. `hc machine login` can retry
+an offline connection but does not force a connection that hc considers connected
+to restart. For a connected machine, identify and terminate only its local SSH
+transport so hc reconnects automatically; do not stop the remote core or WSL.
+Back up the wrapper before deployment; rollback restores it and reconnects the
+same transport. The remote Zsh block needs no behavior change.
+
+Normal exit and handled signals remove the lock. SIGKILL or a host crash can
+leave it behind. If stderr reports `agent selection locked` persistently, ensure
+no bootstrap is selecting an agent before removing the stale lock directory
+(and its `socket` symlink, if present), then reconnect. Never delete the stable
+agent link or kill all SSH processes as a lock-recovery step.
 
 ### Configure a machine
 
@@ -166,8 +188,9 @@ the account associated with the selected key; its successful authentication gree
 status 1 because GitHub provides no interactive shell.
 
 Verify both a new terminal and the **same terminal after SSH reconnects**.
-The symlink target should change, and authentication should work without
-resetting the shell environment.
+A healthy selected agent should stay selected when another client connects.
+After the selected connection fails, reconnecting a healthy client should change
+the target and restore authentication without resetting the shell environment.
 
 - A GPG agent socket such as `/run/user/<uid>/gnupg/S.gpg-agent.ssh` means the shell has not applied the block.
 - A broken fixed symlink means the forwarding connection is down or has not yet
@@ -175,10 +198,11 @@ resetting the shell environment.
 - The block applies to interactive Zsh terminals and their child processes;
   plain `hc exec` does not read `.zshrc`, and existing programs retain their old
   environment.
-- Verify that a later `--hc` connection takes over, an older disconnect does not
-  change the link, and reconnecting restores authentication after the selected
-  connection ends. A short-lived `--hc` probe also takes over and leaves the link
-  unavailable when it exits; use ordinary SSH without forwarding for inspection.
+- Verify healthy-agent retention, bounded replacement of a stalled agent, and
+  rejection of empty or unresponsive replacements. Disconnecting an unselected
+  client must leave the link unchanged. A short-lived `--hc` probe can publish
+  when the selected agent is unavailable and leave a dead link when it exits;
+  use ordinary SSH without forwarding for inspection.
 - The local key must load without a password prompt for hc background reconnects.
 
 ### Remove this setup

@@ -102,14 +102,40 @@ if [ -d "$link" ] || { [ -e "$link" ] && [ ! -L "$link" ]; }; then
     echo "sshk --hc: refusing to replace a non-symlink: $link" >&2
     exit 1
 fi
-# Last publication wins, including reconnects. Leave the link on disconnect;
-# only a new connection may replace it, never cleanup from an older one.
-scratch=$(mktemp -d "$HOME/.ssh/.hc-agent.XXXXXX")
-trap 'rm -f "$scratch/socket"; rmdir "$scratch"' 0
-ln -s "$SSH_AUTH_SOCK" "$scratch/socket"
-mv -f "$scratch/socket" "$link"
-rmdir "$scratch"
-trap - 0
+agent_ready() {
+    [ -S "$1" ] || return 1
+    SSH_AUTH_SOCK="$1" ssh-add -l </dev/null >/dev/null 2>&1 &
+    probe=$!
+    # macOS has no standard timeout command; bound the query with a watchdog.
+    ( sleep 2; kill -KILL "$probe" 2>/dev/null || : ) </dev/null >/dev/null 2>&1 &
+    timer=$!
+    result=0
+    wait "$probe" 2>/dev/null || result=$?
+    kill "$timer" 2>/dev/null || :
+    wait "$timer" 2>/dev/null || :
+    return "$result"
+}
+# Serialize check-and-publish so simultaneous arrivals cannot steal a healthy agent.
+scratch=$HOME/.ssh/.hc-agent.lock
+if (umask 077; mkdir "$scratch") 2>/dev/null; then
+    trap 'rm -f "$scratch/socket"; rmdir "$scratch"' 0
+    trap 'exit 129' HUP
+    trap 'exit 130' INT
+    trap 'exit 143' TERM
+    if ! agent_ready "$link"; then
+        if agent_ready "$SSH_AUTH_SOCK"; then
+            ln -s "$SSH_AUTH_SOCK" "$scratch/socket"
+            mv -f "$scratch/socket" "$link"
+        else
+            echo "sshk --hc: new agent unavailable or empty; leaving the agent link unchanged" >&2
+        fi
+    fi
+    rmdir "$scratch"
+    trap - 0 HUP INT TERM
+else
+    echo "sshk --hc: agent selection locked; leaving the agent link unchanged" >&2
+fi
+# shortcut: no monitoring after startup; reconnect a transport if the selected agent fails.
 exec sh -c "$1"
 REMOTE
 )
